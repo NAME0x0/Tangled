@@ -3,7 +3,6 @@
 A web-based generative art project that recreates Bjørn Ståål's "Entangled" work. This interactive 3D experience features glowing orbs connected by tethers that respond to the physical positions of browser windows on your screen.
 
 ![Entangled Demo](https://via.placeholder.com/800x400.png?text=Entangled+Demo+Screenshot)
-(Replace with an actual screenshot of your application)
 
 ## Features
 
