@@ -203,34 +203,37 @@ if (new URLSearchParams(window.location.search).get("clear")) {
                 return null;
             }
             
-            // Create textures
+            // Initialize textures with random data
             const posTargetTex = gpu.createTexture();
-            const posTargetVar = gpu.addVariable('posTarget', createPosTargetShader(), posTargetTex);
+            initPositionTexture(posTargetTex, index);
             
             const accTex = gpu.createTexture();
-            const accVar = gpu.addVariable('acc', createAccShader(), accTex);
-            
             const velTex = gpu.createTexture();
-            const velVar = gpu.addVariable('vel', createVelShader(), velTex);
-            
             const posTex = gpu.createTexture();
+            initPositionTexture(posTex, index); // Initialize position texture too
+            
+            // Add variables with the initialized textures
+            const posTargetVar = gpu.addVariable('posTarget', createPosTargetShader(), posTargetTex);
+            const accVar = gpu.addVariable('acc', createAccShader(), accTex);
+            const velVar = gpu.addVariable('vel', createVelShader(), velTex);
             const posVar = gpu.addVariable('pos', createPosShader(), posTex);
             
-            // Add uniforms to the shaders (not just dependencies)
-            posTargetVar.material.uniforms.time = { value: 0.0 };
+            // Add critical uniforms
+            const curTime = getTime();
+            posTargetVar.material.uniforms.time = { value: curTime };
             posTargetVar.material.uniforms.radius = { value: SPHERE_RADIUS };
             
-            accVar.material.uniforms.time = { value: 0.0 };
+            accVar.material.uniforms.time = { value: curTime };
             accVar.material.uniforms.radius = { value: SPHERE_RADIUS };
             
-            velVar.material.uniforms.time = { value: 0.0 };
+            velVar.material.uniforms.time = { value: curTime };
             
-            posVar.material.uniforms.time = { value: 0.0 };
+            posVar.material.uniforms.time = { value: curTime };
             posVar.material.uniforms.frame = { value: 0 };
             
-            // Set dependencies properly - ensure all textures can be accessed by shaders
+            // Important: Set dependencies correctly
             gpu.setVariableDependencies(posTargetVar, [posTargetVar]);
-            gpu.setVariableDependencies(accVar, [posTargetVar, posVar, accVar]);
+            gpu.setVariableDependencies(accVar, [posTargetVar, posVar]);
             gpu.setVariableDependencies(velVar, [accVar, velVar, posVar]);
             gpu.setVariableDependencies(posVar, [velVar, posVar, posTargetVar]);
             
@@ -313,28 +316,56 @@ if (new URLSearchParams(window.location.search).get("clear")) {
         // Create GPU computation
         const computation = setupGpuComputation(system.index);
         if (!computation) {
-            console.error("Failed to initialize GPU computation, using fallback sphere");
+            console.error("Failed to initialize GPU computation for system", system.index);
             return;
         }
         
         system.computation = computation;
         
         try {
-            // Create the shader material with simpler settings
+            // Create shader material
             const material = createPointsMaterial(TEXTURE_WIDTH, TEXTURE_HEIGHT);
             
-            // Setup uniforms
-            material.uniforms.time = { value: 0.0 };
+            // Ensure all uniform values are properly initialized
+            material.uniforms.time = { value: getTime() };
             material.uniforms.hue = { value: hue };
             material.uniforms.radius = { value: system.radius };
             
-            // Replace material
-            if (system.points.material) system.points.material.dispose();
+            // Initialize texture references, even if they'll be updated later
+            // This ensures the shader doesn't fail if it tries to access these before first compute
+            const gpu = computation.gpu;
+            const vars = computation.variables;
+            
+            if (vars.posTarget) {
+                material.uniforms.posTarget = { value: gpu.getCurrentRenderTarget(vars.posTarget).texture };
+            }
+            
+            if (vars.acc) {
+                material.uniforms.acc = { value: gpu.getCurrentRenderTarget(vars.acc).texture };
+            }
+            
+            if (vars.vel) {
+                material.uniforms.vel = { value: gpu.getCurrentRenderTarget(vars.vel).texture };
+            }
+            
+            if (vars.pos) {
+                material.uniforms.pos = { value: gpu.getCurrentRenderTarget(vars.pos).texture };
+            }
+            
+            // Replace the material
+            if (system.points.material) {
+                system.points.material.dispose();
+            }
             system.points.material = material;
             
+            // Initialize the system and perform first compute
             system.isInitialized = true;
-            system.frame = 0; // Reset frame counter
-            console.log(`Particle system ${system.index} initialized`);
+            system.frame = 0;
+            
+            // Do an initial compute to populate the textures
+            gpu.compute();
+            
+            console.log(`Particle system ${system.index} initialized with GPU computation`);
         } catch (e) {
             console.error("Error initializing particle material:", e);
         }
@@ -479,7 +510,7 @@ if (new URLSearchParams(window.location.search).get("clear")) {
         
         const wins = windowManager.getWindows();
         
-        // Update particle systems
+        // Update particle systems - ensure this runs EVERY frame
         for (let i = 0; i < particleSystems.length && i < wins.length; i++) {
             const system = particleSystems[i];
             const win = wins[i];
@@ -496,48 +527,87 @@ if (new URLSearchParams(window.location.search).get("clear")) {
             system.points.rotation.x = Math.sin(currentTime * 0.2) * 0.1;
             system.points.rotation.y = Math.cos(currentTime * 0.3) * 0.1;
             
+            // For all systems, ensure they're visible
+            system.points.visible = true;
+            
             // Handle different types of systems
             if (system.isFallback) {
                 // Just rotate fallback spheres
                 system.points.rotation.x += 0.01;
                 system.points.rotation.y += 0.005;
             }
-            else if (system.isInitialized && system.computation) {
+            else if (system.computation && system.computation.gpu) {
                 try {
                     const gpu = system.computation.gpu;
                     const vars = system.computation.variables;
                     
+                    // Skip if GPU or variables are missing
                     if (!gpu || !vars) continue;
                     
                     // Update uniforms for shaders
-                    vars.posTarget.material.uniforms.time.value = currentTime;
-                    vars.acc.material.uniforms.time.value = currentTime;
-                    vars.vel.material.uniforms.time.value = currentTime;
-                    vars.pos.material.uniforms.time.value = currentTime;
-                    vars.pos.material.uniforms.frame.value = system.frame;
-                    system.frame++;
+                    if (vars.posTarget && vars.posTarget.material) {
+                        vars.posTarget.material.uniforms.time.value = currentTime;
+                    }
                     
-                    // Perform GPU computation
+                    if (vars.acc && vars.acc.material) {
+                        vars.acc.material.uniforms.time.value = currentTime;
+                    }
+                    
+                    if (vars.vel && vars.vel.material) {
+                        vars.vel.material.uniforms.time.value = currentTime;
+                    }
+                    
+                    if (vars.pos && vars.pos.material) {
+                        vars.pos.material.uniforms.time.value = currentTime;
+                        vars.pos.material.uniforms.frame.value = system.frame || 0;
+                    }
+                    
+                    // Increment frame counter
+                    system.frame = (system.frame || 0) + 1;
+                    
+                    // CRITICAL: Always compute every frame
                     gpu.compute();
                     
                     // Update material uniforms with computed textures
                     const material = system.points.material;
                     if (material && material.uniforms) {
                         material.uniforms.time.value = currentTime;
-                        material.uniforms.posTarget.value = gpu.getCurrentRenderTarget(vars.posTarget).texture;
-                        material.uniforms.acc.value = gpu.getCurrentRenderTarget(vars.acc).texture;
-                        material.uniforms.vel.value = gpu.getCurrentRenderTarget(vars.vel).texture;
-                        material.uniforms.pos.value = gpu.getCurrentRenderTarget(vars.pos).texture;
+                        
+                        // Make sure textures are properly assigned each frame
+                        if (vars.posTarget) {
+                            material.uniforms.posTarget.value = gpu.getCurrentRenderTarget(vars.posTarget).texture;
+                        }
+                        
+                        if (vars.acc) {
+                            material.uniforms.acc.value = gpu.getCurrentRenderTarget(vars.acc).texture;
+                        }
+                        
+                        if (vars.vel) {
+                            material.uniforms.vel.value = gpu.getCurrentRenderTarget(vars.vel).texture;
+                        }
+                        
+                        if (vars.pos) {
+                            material.uniforms.pos.value = gpu.getCurrentRenderTarget(vars.pos).texture;
+                        }
+                        
+                        // Force material update
+                        material.needsUpdate = true;
                     }
                 } catch (e) {
                     console.error("Error updating GPU system:", e);
-                    // If there's an error, mark system for potential replacement
-                    system.hasErrors = true;
                 }
+            }
+            // If the system is created but computation is not ready yet, do nothing
+            else if (!system.isInitialized) {
+                // System is still initializing, leave alone
+                console.log("Waiting for system", i, "to initialize");
             }
         }
         
+        // Render the scene
         renderer.render(scene, camera);
+        
+        // Continue the render loop
         requestAnimationFrame(render);
     }
 
@@ -548,5 +618,24 @@ if (new URLSearchParams(window.location.search).get("clear")) {
         camera = new t.OrthographicCamera(0, width, 0, height, -10000, 10000);
         camera.updateProjectionMatrix();
         renderer.setSize(width, height);
+    }
+}
+
+// New helper function to initialize position texture
+function initPositionTexture(texture, systemIndex) {
+    const radius = SPHERE_RADIUS + systemIndex * 15;
+    const positions = texture.image.data;
+    
+    // Fill the texture with initial particle positions
+    for (let i = 0; i < positions.length; i += 4) {
+        // Create a random point in a sphere
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const r = radius * Math.cbrt(Math.random());
+        
+        positions[i] = r * Math.sin(phi) * Math.cos(theta); // X
+        positions[i+1] = r * Math.sin(phi) * Math.sin(theta); // Y
+        positions[i+2] = r * Math.cos(phi); // Z
+        positions[i+3] = 1.0; // W
     }
 }

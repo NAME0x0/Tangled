@@ -50,12 +50,12 @@ function createPointsMaterial(nX, nY) {
         varying vec3 vColor;
         
         void main() {
-            // Create circular point
+            // Create circular point with softer edges
             float r = length(gl_PointCoord - vec2(0.5));
             if (r > 0.5) discard;
             
-            // Add simple fading at the edges
-            float alpha = 0.6 * (1.0 - r * 1.5);
+            // Stronger alpha, especially in the center
+            float alpha = 0.8 * (1.0 - r * 1.8);
             gl_FragColor = vec4(vColor, alpha);
         }
     `;
@@ -65,7 +65,10 @@ function createPointsMaterial(nX, nY) {
             time: { value: 0.0 },
             hue: { value: 0.0 },
             radius: { value: 80.0 },
-            pos: { value: null }
+            pos: { value: null },
+            posTarget: { value: null }, // Add missing uniforms
+            acc: { value: null },
+            vel: { value: null }
         },
         vertexShader: vert,
         fragmentShader: frag,
