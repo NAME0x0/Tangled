@@ -56,27 +56,34 @@ if (new URLSearchParams(window.location.search).get("clear")) {
     };
 
     function setupUI() {
-        // Setup the particle count slider
         const particleCountSlider = document.getElementById('particleCount');
         const particleCountValue = document.getElementById('particleCountValue');
         
         if (particleCountSlider && particleCountValue) {
+            let debounceTimer = null;
+            
             particleCountSlider.addEventListener('input', () => {
                 const newValue = parseInt(particleCountSlider.value);
                 particleCountValue.textContent = newValue.toLocaleString();
                 
-                // Only update if finished sliding or small change
-                if (!isLoadingParticles) {
-                    PARTICLES_PER_SYSTEM = newValue;
-                    TEXTURE_WIDTH = Math.ceil(Math.sqrt(PARTICLES_PER_SYSTEM));
-                    TEXTURE_HEIGHT = TEXTURE_WIDTH;
-                    needsParticleUpdate = true;
-                }
+                // Use debouncing to prevent too many updates
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    if (newValue !== PARTICLES_PER_SYSTEM) {
+                        console.log(`Changing particle count from ${PARTICLES_PER_SYSTEM} to ${newValue}`);
+                        PARTICLES_PER_SYSTEM = newValue;
+                        TEXTURE_WIDTH = Math.ceil(Math.sqrt(PARTICLES_PER_SYSTEM));
+                        TEXTURE_HEIGHT = TEXTURE_WIDTH;
+                        needsParticleUpdate = true;
+                    }
+                }, 300);
             });
             
             // Initialize with default value
             particleCountValue.textContent = PARTICLES_PER_SYSTEM.toLocaleString();
         }
+        
+        // Rest of setupUI function...
         
         // Setup the new window button
         const newWindowBtn = document.getElementById('newWindowBtn');
@@ -187,49 +194,66 @@ if (new URLSearchParams(window.location.search).get("clear")) {
 
     // Setup GPU computation for a particle system
     function setupGpuComputation(index) {
-        const gpu = new GPUComputationRenderer(TEXTURE_WIDTH, TEXTURE_HEIGHT, renderer);
-        
-        // Create position target texture
-        const posTargetTex = gpu.createTexture();
-        const posTargetVar = gpu.addVariable('posTarget', createPosTargetShader(), posTargetTex);
-        
-        // Create acceleration texture
-        const accTex = gpu.createTexture();
-        const accVar = gpu.addVariable('acc', createAccShader(), accTex);
-        
-        // Create velocity texture
-        const velTex = gpu.createTexture();
-        const velVar = gpu.addVariable('vel', createVelShader(), velTex);
-        
-        // Create position texture
-        const posTex = gpu.createTexture();
-        const posVar = gpu.addVariable('pos', createPosShader(), posTex);
-        
-        // Set variable dependencies
-        gpu.setVariableDependencies(accVar, [posTargetVar, posVar]);
-        gpu.setVariableDependencies(velVar, [accVar, velVar, posVar]);
-        gpu.setVariableDependencies(posVar, [velVar, posVar, posTargetVar]);
-        
-        // Add uniforms
-        posTargetVar.material.uniforms.radius = { value: SPHERE_RADIUS };
-        accVar.material.uniforms.radius = { value: SPHERE_RADIUS };
-        
-        // Check for completeness
-        const error = gpu.init();
-        if (error !== null) {
-            console.error(error);
+        try {
+            console.log(`Setting up GPU computation for system ${index} with ${PARTICLES_PER_SYSTEM} particles`);
+            const gpu = new GPUComputationRenderer(TEXTURE_WIDTH, TEXTURE_HEIGHT, renderer);
+            
+            if (!gpu) {
+                console.error("Failed to create GPUComputationRenderer");
+                return null;
+            }
+            
+            // Create textures
+            const posTargetTex = gpu.createTexture();
+            const posTargetVar = gpu.addVariable('posTarget', createPosTargetShader(), posTargetTex);
+            
+            const accTex = gpu.createTexture();
+            const accVar = gpu.addVariable('acc', createAccShader(), accTex);
+            
+            const velTex = gpu.createTexture();
+            const velVar = gpu.addVariable('vel', createVelShader(), velTex);
+            
+            const posTex = gpu.createTexture();
+            const posVar = gpu.addVariable('pos', createPosShader(), posTex);
+            
+            // Add uniforms to the shaders (not just dependencies)
+            posTargetVar.material.uniforms.time = { value: 0.0 };
+            posTargetVar.material.uniforms.radius = { value: SPHERE_RADIUS };
+            
+            accVar.material.uniforms.time = { value: 0.0 };
+            accVar.material.uniforms.radius = { value: SPHERE_RADIUS };
+            
+            velVar.material.uniforms.time = { value: 0.0 };
+            
+            posVar.material.uniforms.time = { value: 0.0 };
+            posVar.material.uniforms.frame = { value: 0 };
+            
+            // Set dependencies properly - ensure all textures can be accessed by shaders
+            gpu.setVariableDependencies(posTargetVar, [posTargetVar]);
+            gpu.setVariableDependencies(accVar, [posTargetVar, posVar, accVar]);
+            gpu.setVariableDependencies(velVar, [accVar, velVar, posVar]);
+            gpu.setVariableDependencies(posVar, [velVar, posVar, posTargetVar]);
+            
+            // Check for errors
+            const error = gpu.init();
+            if (error !== null) {
+                console.error(`GPU computation init error: ${error}`);
+                return null;
+            }
+            
+            return {
+                gpu,
+                variables: {
+                    posTarget: posTargetVar,
+                    acc: accVar,
+                    vel: velVar,
+                    pos: posVar
+                }
+            };
+        } catch (e) {
+            console.error("Error setting up GPU computation:", e);
             return null;
         }
-        
-        return {
-            gpu,
-            variables: {
-                posTarget: posTargetVar,
-                acc: accVar,
-                vel: velVar,
-                pos: posVar
-            }
-        };
     }
 
     function createParticleSystem(index, position, hue) {
@@ -289,40 +313,65 @@ if (new URLSearchParams(window.location.search).get("clear")) {
         // Create GPU computation
         const computation = setupGpuComputation(system.index);
         if (!computation) {
-            console.error("Failed to initialize GPU computation");
+            console.error("Failed to initialize GPU computation, using fallback sphere");
             return;
         }
         
         system.computation = computation;
         
-        // Create the shader material
-        const material = createPointsMaterial(TEXTURE_WIDTH, TEXTURE_HEIGHT);
-        
-        // Setup uniforms
-        material.uniforms.time = { value: 0.0 };
-        material.uniforms.posTarget = { value: null };
-        material.uniforms.acc = { value: null };
-        material.uniforms.vel = { value: null };
-        material.uniforms.pos = { value: null };
-        material.uniforms.hue = { value: hue };
-        material.uniforms.radius = { value: system.radius };
-        
-        // Replace material
-        system.points.material.dispose();
-        system.points.material = material;
-        
-        system.isInitialized = true;
-        console.log(`Particle system ${system.index} initialized`);
+        try {
+            // Create the shader material with simpler settings
+            const material = createPointsMaterial(TEXTURE_WIDTH, TEXTURE_HEIGHT);
+            
+            // Setup uniforms
+            material.uniforms.time = { value: 0.0 };
+            material.uniforms.hue = { value: hue };
+            material.uniforms.radius = { value: system.radius };
+            
+            // Replace material
+            if (system.points.material) system.points.material.dispose();
+            system.points.material = material;
+            
+            system.isInitialized = true;
+            system.frame = 0; // Reset frame counter
+            console.log(`Particle system ${system.index} initialized`);
+        } catch (e) {
+            console.error("Error initializing particle material:", e);
+        }
     }
 
     function updateParticleSystems() {
+        console.log("Updating particle systems with", PARTICLES_PER_SYSTEM, "particles per system");
         isLoadingParticles = true;
         
-        // Remove existing particle systems
+        // First, properly dispose of existing resources
         particleSystems.forEach(system => {
             world.remove(system.points);
+            
+            // Proper disposal of resources
+            if (system.points) {
+                if (system.points.geometry) system.points.geometry.dispose();
+                if (system.points.material) {
+                    if (system.points.material.map) system.points.material.map.dispose();
+                    system.points.material.dispose();
+                }
+            }
+            
+            // Cleanup GPU computation resources if they exist
             if (system.computation && system.computation.gpu) {
-                // Could add proper disposal here
+                // GPU Computation Renderer doesn't have a direct dispose method,
+                // but we can manually clean up its render targets
+                const variables = system.computation.variables;
+                if (variables) {
+                    Object.values(variables).forEach(variable => {
+                        if (variable.renderTargets) {
+                            variable.renderTargets.forEach(rt => {
+                                if (rt && rt.texture) rt.texture.dispose();
+                                if (rt) rt.dispose();
+                            });
+                        }
+                    });
+                }
             }
         });
         
@@ -330,6 +379,47 @@ if (new URLSearchParams(window.location.search).get("clear")) {
         gpuComputers = [];
         
         // Create new particle systems based on window positions
+        const wins = windowManager.getWindows();
+        
+        try {
+            for (let i = 0; i < wins.length; i++) {
+                const win = wins[i];
+                const position = new t.Vector3(
+                    win.shape.x + (win.shape.w * 0.5),
+                    win.shape.y + (win.shape.h * 0.5),
+                    0
+                );
+                
+                // Create hue based on window index
+                const hue = i * 0.1;
+                
+                // Create particle system
+                const system = createParticleSystem(i, position, hue);
+                world.add(system.points);
+                particleSystems.push(system);
+            }
+            
+            needsParticleUpdate = false;
+            
+            // Allow slider to work again after loading completes
+            setTimeout(() => {
+                isLoadingParticles = false;
+                console.log("Particle systems updated successfully");
+            }, wins.length * LOADING_INTERVAL + 200);
+        } catch (error) {
+            console.error("Error creating particle systems:", error);
+            
+            // Fallback to simple spheres if particle creation fails
+            createFallbackSpheres();
+            
+            setTimeout(() => {
+                isLoadingParticles = false;
+            }, 200);
+        }
+    }
+
+    // Add a fallback method for when GPU particles fail
+    function createFallbackSpheres() {
         const wins = windowManager.getWindows();
         
         for (let i = 0; i < wins.length; i++) {
@@ -340,21 +430,27 @@ if (new URLSearchParams(window.location.search).get("clear")) {
                 0
             );
             
-            // Create hue based on window index
-            const hue = i * 0.1;
+            // Create a colored sphere
+            const color = new t.Color().setHSL(i * 0.1, 1.0, 0.5);
+            const geometry = new t.SphereGeometry(50 + i * 10, 16, 16);
+            const material = new t.MeshBasicMaterial({
+                color: color,
+                wireframe: true
+            });
+            const sphere = new t.Mesh(geometry, material);
+            sphere.position.copy(position);
             
-            // Create particle system
-            const system = createParticleSystem(i, position, hue);
-            world.add(system.points);
+            const system = {
+                points: sphere,
+                index: i,
+                targetPosition: position.clone(),
+                isInitialized: true,
+                isFallback: true
+            };
+            
+            world.add(sphere);
             particleSystems.push(system);
         }
-        
-        needsParticleUpdate = false;
-        
-        // Allow slider to work again after loading completes
-        setTimeout(() => {
-            isLoadingParticles = false;
-        }, wins.length * LOADING_INTERVAL + 100);
     }
 
     function updateWindowShape(easing = true) {
@@ -400,29 +496,43 @@ if (new URLSearchParams(window.location.search).get("clear")) {
             system.points.rotation.x = Math.sin(currentTime * 0.2) * 0.1;
             system.points.rotation.y = Math.cos(currentTime * 0.3) * 0.1;
             
-            // Update GPU computation if initialized
-            if (system.isInitialized && system.computation) {
-                const gpu = system.computation.gpu;
-                const vars = system.computation.variables;
-                
-                // Update uniforms for shaders
-                vars.posTarget.material.uniforms.time = { value: currentTime };
-                vars.acc.material.uniforms.time = { value: currentTime };
-                vars.pos.material.uniforms.time = { value: currentTime };
-                vars.pos.material.uniforms.frame = { value: system.frame };
-                system.frame++;
-                
-                // Perform GPU computation
-                gpu.compute();
-                
-                // Update material uniforms with computed textures
-                const material = system.points.material;
-                if (material.uniforms) {  // Check if material has been replaced with shader material
-                    material.uniforms.time.value = currentTime;
-                    material.uniforms.posTarget.value = gpu.getCurrentRenderTarget(vars.posTarget).texture;
-                    material.uniforms.acc.value = gpu.getCurrentRenderTarget(vars.acc).texture;
-                    material.uniforms.vel.value = gpu.getCurrentRenderTarget(vars.vel).texture;
-                    material.uniforms.pos.value = gpu.getCurrentRenderTarget(vars.pos).texture;
+            // Handle different types of systems
+            if (system.isFallback) {
+                // Just rotate fallback spheres
+                system.points.rotation.x += 0.01;
+                system.points.rotation.y += 0.005;
+            }
+            else if (system.isInitialized && system.computation) {
+                try {
+                    const gpu = system.computation.gpu;
+                    const vars = system.computation.variables;
+                    
+                    if (!gpu || !vars) continue;
+                    
+                    // Update uniforms for shaders
+                    vars.posTarget.material.uniforms.time.value = currentTime;
+                    vars.acc.material.uniforms.time.value = currentTime;
+                    vars.vel.material.uniforms.time.value = currentTime;
+                    vars.pos.material.uniforms.time.value = currentTime;
+                    vars.pos.material.uniforms.frame.value = system.frame;
+                    system.frame++;
+                    
+                    // Perform GPU computation
+                    gpu.compute();
+                    
+                    // Update material uniforms with computed textures
+                    const material = system.points.material;
+                    if (material && material.uniforms) {
+                        material.uniforms.time.value = currentTime;
+                        material.uniforms.posTarget.value = gpu.getCurrentRenderTarget(vars.posTarget).texture;
+                        material.uniforms.acc.value = gpu.getCurrentRenderTarget(vars.acc).texture;
+                        material.uniforms.vel.value = gpu.getCurrentRenderTarget(vars.vel).texture;
+                        material.uniforms.pos.value = gpu.getCurrentRenderTarget(vars.pos).texture;
+                    }
+                } catch (e) {
+                    console.error("Error updating GPU system:", e);
+                    // If there's an error, mark system for potential replacement
+                    system.hasErrors = true;
                 }
             }
         }

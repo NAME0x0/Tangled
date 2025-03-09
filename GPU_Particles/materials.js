@@ -6,68 +6,56 @@ let dummyTex = new t.Texture();
 
 function createPointsMaterial(nX, nY) {
     let vert = `
-        ${hash12}
-        ${uvFromIndex}
-
-        uniform sampler2D posTarget;
         uniform sampler2D pos;
-        uniform sampler2D vel;
         uniform float time;
         uniform float hue;
         uniform float radius;
-        varying float vAlpha;
         varying vec3 vColor;
-
+        
         // Simple HSL to RGB conversion
-        vec3 hsv2rgb(vec3 c) {
-            vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-            vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-            return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+        vec3 hsl2rgb(vec3 c) {
+            vec3 rgb = clamp(abs(mod(c.x*6.0+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0, 0.0, 1.0);
+            return c.z + c.y * (rgb-0.5)*(1.0-abs(2.0*c.z-1.0));
         }
-
+        
         void main() {
+            // Get index and UV for this vertex
             int i = gl_VertexID;
-            ivec2 texSize = ivec2(${nX}, ${nX});
-            vec2 uv = uvFromIndex(i, texSize);
+            float x = float(i % ${nX});
+            float y = float(i / ${nX});
+            vec2 uv = vec2(x, y) / vec2(${nX}, ${nY});
             
-            // Get current position from texture
+            // Get position from texture
             vec4 texPos = texture2D(pos, uv);
-            vec4 velData = texture2D(vel, uv);
+            vec3 position = texPos.xyz;
             
-            // Calculate point size based on velocity
-            float speed = length(velData.xyz);
-            float n = hash12(vec2(float(i), 0.0));
-            float pointSize = mix(1.5, 3.0, n) / mix(0.5, 2.0, min(1.0, speed * 4.0));
+            // Simple deterministic "random" value for this vertex
+            float n = fract(sin(float(i) * 0.1) * 43758.5453);
             
-            // Calculate alpha
-            vAlpha = mix(0.3, 0.8, n);
+            // Particle size and color
+            gl_PointSize = mix(1.5, 3.5, n);
             
-            // Color based on position and velocity
-            float h = hue + hash12(uv) * 0.1; // Small random hue variation
-            float s = 0.7 + 0.3 * sin(time * 0.001 + n * 6.28);
-            float l = 0.5 + 0.2 * cos(time * 0.0007 + n * 6.28);
+            // Calculate color - simple HSL
+            float h = hue;
+            float s = 0.8;
+            float l = 0.5 + 0.2 * n;
+            vColor = hsl2rgb(vec3(h, s, l));
             
-            // Adjust color based on velocity
-            l += min(0.3, speed);
-            vColor = hsv2rgb(vec3(h, s, l));
-            
-            // Set position and size
-            gl_PointSize = pointSize;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(texPos.xyz, 1.0);
+            // Set position
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
     `;
 
     let frag = `
-        varying float vAlpha;
         varying vec3 vColor;
-
+        
         void main() {
-            // Simple circular point
+            // Create circular point
             float r = length(gl_PointCoord - vec2(0.5));
             if (r > 0.5) discard;
             
-            // Soften edges
-            float alpha = vAlpha * (1.0 - r * 2.0);
+            // Add simple fading at the edges
+            float alpha = 0.6 * (1.0 - r * 1.5);
             gl_FragColor = vec4(vColor, alpha);
         }
     `;
@@ -77,9 +65,6 @@ function createPointsMaterial(nX, nY) {
             time: { value: 0.0 },
             hue: { value: 0.0 },
             radius: { value: 80.0 },
-            posTarget: { value: null },
-            acc: { value: null },
-            vel: { value: null },
             pos: { value: null }
         },
         vertexShader: vert,
