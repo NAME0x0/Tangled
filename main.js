@@ -1,12 +1,10 @@
 import WindowManager from './WindowManager.js'
 
-
-
 const t = THREE;
 let camera, scene, renderer, world;
 let near, far;
 let pixR = window.devicePixelRatio ? window.devicePixelRatio : 1;
-let cubes = [];
+let spheres = []; // Changed from cubes to spheres
 let sceneOffsetTarget = {x: 0, y: 0};
 let sceneOffset = {x: 0, y: 0};
 
@@ -34,6 +32,32 @@ if (new URLSearchParams(window.location.search).get("clear"))
 }
 else
 {	
+	// Setup the new window button
+	document.getElementById('newWindowBtn').addEventListener('click', () => {
+		// Calculate a position offset from the current window
+		const offsetX = Math.floor(Math.random() * 300) - 150;
+		const offsetY = Math.floor(Math.random() * 300) - 150;
+		
+		// Open a new window with same URL
+		const newWindow = window.open(
+			window.location.href, 
+			'_blank',
+			`width=${window.outerWidth},height=${window.outerHeight},left=${window.screenX + offsetX},top=${window.screenY + offsetY}`
+		);
+		
+		// Focus the new window if browser allows
+		if (newWindow) {
+			newWindow.focus();
+		}
+		
+		// Add button press animation
+		const btn = document.getElementById('newWindowBtn');
+		btn.style.transform = 'scale(0.95)';
+		setTimeout(() => {
+			btn.style.transform = '';
+		}, 150);
+	});
+
 	// this code is essential to circumvent that some browsers preload the content of some pages before you actually hit the url
 	document.addEventListener("visibilitychange", () => 
 	{
@@ -105,21 +129,21 @@ else
 
 	function windowsUpdated ()
 	{
-		updateNumberOfCubes();
+		updateNumberOfSpheres(); // Changed from updateNumberOfCubes
 	}
 
-	function updateNumberOfCubes ()
+	function updateNumberOfSpheres () // Changed from updateNumberOfCubes
 	{
 		let wins = windowManager.getWindows();
 
-		// remove all cubes
-		cubes.forEach((c) => {
-			world.remove(c);
+		// remove all spheres
+		spheres.forEach((s) => { // Changed from cubes to spheres
+			world.remove(s);
 		})
 
-		cubes = [];
+		spheres = []; // Changed from cubes to spheres
 
-		// add new cubes based on the current window setup
+		// add new spheres based on the current window setup
 		for (let i = 0; i < wins.length; i++)
 		{
 			let win = wins[i];
@@ -128,12 +152,13 @@ else
 			c.setHSL(i * .1, 1.0, .5);
 
 			let s = 100 + i * 50;
-			let cube = new t.Mesh(new t.BoxGeometry(s, s, s), new t.MeshBasicMaterial({color: c , wireframe: true}));
-			cube.position.x = win.shape.x + (win.shape.w * .5);
-			cube.position.y = win.shape.y + (win.shape.h * .5);
+			// Create a sphere mesh instead of cube
+			let sphere = new t.Mesh(new t.SphereGeometry(s/2, 16, 16), new t.MeshBasicMaterial({color: c , wireframe: true}));
+			sphere.position.x = win.shape.x + (win.shape.w * .5);
+			sphere.position.y = win.shape.y + (win.shape.h * .5);
 
-			world.add(cube);
-			cubes.push(cube);
+			world.add(sphere);
+			spheres.push(sphere); // Changed from cubes to spheres
 		}
 	}
 
@@ -164,19 +189,19 @@ else
 		let wins = windowManager.getWindows();
 
 
-		// loop through all our cubes and update their positions based on current window positions
-		for (let i = 0; i < cubes.length; i++)
+		// loop through all our spheres and update their positions based on current window positions
+		for (let i = 0; i < spheres.length; i++) // Changed from cubes to spheres
 		{
-			let cube = cubes[i];
+			let sphere = spheres[i]; // Changed from cube to sphere
 			let win = wins[i];
 			let _t = t;// + i * .2;
 
 			let posTarget = {x: win.shape.x + (win.shape.w * .5), y: win.shape.y + (win.shape.h * .5)}
 
-			cube.position.x = cube.position.x + (posTarget.x - cube.position.x) * falloff;
-			cube.position.y = cube.position.y + (posTarget.y - cube.position.y) * falloff;
-			cube.rotation.x = _t * .5;
-			cube.rotation.y = _t * .3;
+			sphere.position.x = sphere.position.x + (posTarget.x - sphere.position.x) * falloff; // Changed from cube to sphere
+			sphere.position.y = sphere.position.y + (posTarget.y - sphere.position.y) * falloff; // Changed from cube to sphere
+			sphere.rotation.x = _t * .5; // Changed from cube to sphere
+			sphere.rotation.y = _t * .3; // Changed from cube to sphere
 		};
 
 		renderer.render(scene, camera);
