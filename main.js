@@ -12,7 +12,7 @@ let sceneOffsetTarget = {x: 0, y: 0};
 let sceneOffset = {x: 0, y: 0};
 
 // GPU computation variables
-let PARTICLES_PER_SYSTEM = 10000; // Reduced default for better performance
+let PARTICLES_PER_SYSTEM = 1000; // Reduced default for better performance
 let TEXTURE_WIDTH = Math.ceil(Math.sqrt(PARTICLES_PER_SYSTEM));
 let TEXTURE_HEIGHT = TEXTURE_WIDTH;
 let gpuComputers = [];
@@ -142,24 +142,28 @@ if (new URLSearchParams(window.location.search).get("clear")) {
     }
 
     function setupScene() {
-        camera = new t.OrthographicCamera(0, 0, window.innerWidth, window.innerHeight, -10000, 10000);
+        // Create perspective camera instead of orthographic for better 3D view
+        camera = new t.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 10000);
+        camera.position.z = 500; // Move camera back to see particles
         
-        camera.position.z = 2.5;
-        near = camera.position.z - .5;
-        far = camera.position.z + 0.5;
-
         scene = new t.Scene();
-        scene.background = new t.Color(0.0);
+        scene.background = new t.Color(0x000000);
         scene.add(camera);
 
-        renderer = new t.WebGLRenderer({antialias: true, depthBuffer: true, alpha: true});
+        renderer = new t.WebGLRenderer({antialias: true, depthBuffer: true});
         renderer.setPixelRatio(pixR);
         
         world = new t.Object3D();
         scene.add(world);
 
+        // Add some debug visuals to help with orientation
+        const axesHelper = new t.AxesHelper(100);
+        world.add(axesHelper);
+
         renderer.domElement.setAttribute("id", "scene");
         document.body.appendChild(renderer.domElement);
+        
+        console.log("Scene setup complete");
     }
 
     function setupWindowManager() {
@@ -388,11 +392,12 @@ if (new URLSearchParams(window.location.search).get("clear")) {
         requestAnimationFrame(render);
     }
 
+    // Update the resize function to maintain perspective camera
     function resize() {
         let width = window.innerWidth;
         let height = window.innerHeight;
         
-        camera = new t.OrthographicCamera(0, width, 0, height, -10000, 10000);
+        camera.aspect = width / height;
         camera.updateProjectionMatrix();
         renderer.setSize(width, height);
     }

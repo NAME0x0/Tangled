@@ -26,42 +26,45 @@ function createPointsMaterial(nX, nY) {
             int i = gl_VertexID;
             ivec2 size = ivec2(${nX}, ${nX});
             vec2 uv = uvFromIndex(i, size);
-            vec4 posTarget = texture2D(posTarget, uv);
             vec4 pos = texture2D(pos, uv);
             vec4 vel = texture2D(vel, uv);
 
-            vec3 p = pos.xyz; // Get position from GPU computation
-            float t = time * 0.0003;
-
+            vec3 p = pos.xyz;
+            
             // Generate unique properties for this particle
             float n = hash12(vec2(float(i), 0.0));
             
-            // Calculate point size based on velocity and random factor
+            // Make particles larger for better visibility
+            float baseSize = 3.0; // Increased base size
             float speed = length(vel.xyz);
-            float speedFactor = clamp(speed * 2.0, 0.5, 3.0);
-            size = mix(1.5, 3.0, pow(n, 2.0)) / speedFactor;
+            float speedFactor = clamp(speed * 1.5, 0.5, 2.0);
+            size = baseSize * mix(0.8, 1.5, pow(n, 1.5)) / speedFactor;
             
-            // Calculate alpha based on speed and random factor
-            alpha = mix(0.2, 0.8, pow(n, 1.5));
+            // Higher base alpha for better visibility
+            alpha = mix(0.4, 1.0, pow(n, 1.2));
             
-            // Special larger particles
-            if (n > 0.99) {
-                size *= 1.8;
-                alpha *= 1.5;
+            // Special larger particles for nebula core effect
+            if (n > 0.97) {
+                size *= 2.5;
+                alpha *= 1.8;
             }
             
             // Calculate color based on velocity and hue
-            vec4 a = texture2D(vel, uv);
-            float velLen = length(a.xyz);
+            float velLen = length(vel.xyz);
             
-            // Base color derived from hue parameter
-            vec3 c1 = vec3(cos(hue * 6.28318), 0.6, 0.5);
-            vec3 c2 = vec3(cos(hue * 6.28318 + 2.0), 0.8, 0.3);
+            // Create warmer nebula colors (blues, purples, pinks)
+            vec3 c1 = vec3(cos(hue * 6.28318 + 2.0), 0.7, 0.9); // Base color
+            vec3 c2 = vec3(cos(hue * 6.28318 + 4.0), 0.9, 0.6); // Accent color
             
             // Mix colors based on velocity for dynamic effect
-            float s = pow(velLen / 1.0, 3.0);
+            float s = pow(velLen / 0.5, 2.0);
             s = clamp(s, 0.0, 1.0);
             col = mix(c1, c2, s);
+            
+            // Make particles in center area brighter
+            float distFromCenter = length(p.xyz);
+            float centerBoost = 1.0 + 0.5 * smoothstep(radius * 0.8, 0.0, distFromCenter);
+            alpha *= centerBoost;
             
             // Set position and size
             gl_PointSize = size;
@@ -77,13 +80,13 @@ function createPointsMaterial(nX, nY) {
 
         void main() 
         {
-            // Create soft circular point
+            // Create soft circular point with stronger center glow
             float r = length(gl_PointCoord - vec2(0.5));
             if (r > 0.5) discard;
             
-            // Add glow effect with falloff
-            float glow = 0.5 - r;
-            float finalAlpha = alpha * glow * 2.0;
+            // Create stronger glow effect
+            float glow = pow(0.5 - r, 1.5) * 2.5;
+            float finalAlpha = alpha * glow;
             
             // Output color with alpha
             gl_FragColor = vec4(col.rgb, finalAlpha);
