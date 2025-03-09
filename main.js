@@ -32,33 +32,9 @@ if (new URLSearchParams(window.location.search).get("clear"))
 }
 else
 {	
-	// Setup the new window button
-	document.getElementById('newWindowBtn').addEventListener('click', () => {
-		// Calculate a position offset from the current window
-		const offsetX = Math.floor(Math.random() * 300) - 150;
-		const offsetY = Math.floor(Math.random() * 300) - 150;
-		
-		// Open a new window with same URL
-		const newWindow = window.open(
-			window.location.href, 
-			'_blank',
-			`width=${window.outerWidth},height=${window.outerHeight},left=${window.screenX + offsetX},top=${window.screenY + offsetY}`
-		);
-		
-		// Focus the new window if browser allows
-		if (newWindow) {
-			newWindow.focus();
-		}
-		
-		// Add button press animation
-		const btn = document.getElementById('newWindowBtn');
-		btn.style.transform = 'scale(0.95)';
-		setTimeout(() => {
-			btn.style.transform = '';
-		}, 150);
-	});
-
-	// this code is essential to circumvent that some browsers preload the content of some pages before you actually hit the url
+	// Move button setup inside the window.onload or visibilitychange callback
+	// as the button might not exist when the script runs initially
+	
 	document.addEventListener("visibilitychange", () => 
 	{
 		if (document.visibilityState != 'hidden' && !initialized)
@@ -71,6 +47,36 @@ else
 		if (document.visibilityState != 'hidden')
 		{
 			init();
+			
+			// Setup the new window button after DOM is fully loaded
+			const newWindowBtn = document.getElementById('newWindowBtn');
+			if (newWindowBtn) {
+				newWindowBtn.addEventListener('click', () => {
+					// Calculate a position offset from the current window
+					const offsetX = Math.floor(Math.random() * 300) - 150;
+					const offsetY = Math.floor(Math.random() * 300) - 150;
+					
+					// Open a new window with same URL
+					const newWindow = window.open(
+						window.location.href, 
+						'_blank',
+						`width=${window.outerWidth},height=${window.outerHeight},left=${window.screenX + offsetX},top=${window.screenY + offsetY}`
+					);
+					
+					// Focus the new window if browser allows
+					if (newWindow) {
+						newWindow.focus();
+					}
+					
+					// Add button press animation
+					newWindowBtn.style.transform = 'scale(0.95)';
+					setTimeout(() => {
+						newWindowBtn.style.transform = '';
+					}, 150);
+				});
+			} else {
+				console.error("Button with ID 'newWindowBtn' not found!");
+			}
 		}
 	};
 
