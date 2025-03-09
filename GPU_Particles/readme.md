@@ -1,4 +1,4 @@
-#GPU Particles
+# GPU Particles
 
 Simple example using GPUComputationRenderer in three.js to animate 1 million particles using shaders.
 
