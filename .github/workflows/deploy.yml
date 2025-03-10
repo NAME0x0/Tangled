@@ -1,0 +1,78 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      
+      # Optimize large files (especially Three.js library)
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 16
+
+      # Optimize images if any
+      - name: Optimize images
+        run: |
+          npm install -g svgo
+          find . -type f -name "*.svg" -exec svgo {} \;
+        continue-on-error: true
+      
+      # Configure Pages
+      - name: Setup Pages
+        uses: actions/configure-pages@v3
+      
+      # Upload artifact
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: .
+      
+      # Deploy to GitHub Pages with advanced settings
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Create .nojekyll file to bypass Jekyll processing (important for performance)
+      - name: Create .nojekyll file
+        run: touch .nojekyll
+      
+      # Create custom _headers file for Cloudflare-enhanced caching (if you enable Cloudflare)
+      - name: Create _headers file for caching
+        run: |
+          echo "/*" > _headers
+          echo "  Cache-Control: max-age=86400" >> _headers
+          echo "*.js" >> _headers
+          echo "  Cache-Control: max-age=31536000" >> _headers
+          echo "*.css" >> _headers
+          echo "  Cache-Control: max-age=31536000" >> _headers
+      
+      # Final deploy with all optimizations
+      - name: Deploy with optimizations
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .
+          publish_branch: gh-pages
+          force_orphan: true
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Deploy to GitHub Pages with performance optimizations'
+          enable_jekyll: false
