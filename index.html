@@ -71,79 +71,9 @@
         .new-window-btn:hover svg {
             transform: rotate(45deg);
         }
-
-        /* Slider container */
-        .control-panel {
-            position: fixed;
-            bottom: 30px;
-            left: 30px;
-            padding: 15px;
-            background: rgba(255, 255, 255, 0.15);
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            border-radius: 12px;
-            color: white;
-            font-family: 'Arial', sans-serif;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .slider-container {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-        }
-
-        .slider-container label {
-            font-size: 14px;
-            display: flex;
-            justify-content: space-between;
-        }
-
-        .slider-container span {
-            font-weight: bold;
-            opacity: 0.9;
-        }
-
-        input[type="range"] {
-            width: 200px;
-            height: 5px;
-            -webkit-appearance: none;
-            appearance: none;
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 5px;
-            outline: none;
-        }
-
-        input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 15px;
-            height: 15px;
-            border-radius: 50%;
-            background: white;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        input[type="range"]::-webkit-slider-thumb:hover {
-            transform: scale(1.2);
-            background: rgba(255, 255, 255, 0.9);
-        }
     </style>
 </head>
 <body>
-    <div class="control-panel">
-        <div class="slider-container">
-            <label for="particleCount">Particle Count: <span id="particleCountValue">500</span></label>
-            <input type="range" id="particleCount" min="100" max="10000" step="100" value="500">
-        </div>
-    </div>
-
     <button class="new-window-btn" id="newWindowBtn">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 3h6v6M14 10l6-6M9 21H3v-6M10 14l-6 6"/>

@@ -12,14 +12,15 @@ let sceneOffsetTarget = {x: 0, y: 0};
 let sceneOffset = {x: 0, y: 0};
 
 // GPU computation variables
-let PARTICLES_PER_SYSTEM = 500; // Default value
-let TEXTURE_WIDTH = Math.ceil(Math.sqrt(PARTICLES_PER_SYSTEM));
-let TEXTURE_HEIGHT = TEXTURE_WIDTH;
+const PARTICLES_PER_SYSTEM = 1000000; // Fixed at 1 million particles
+const TEXTURE_WIDTH = Math.ceil(Math.sqrt(PARTICLES_PER_SYSTEM));
+const TEXTURE_HEIGHT = TEXTURE_WIDTH;
 let gpuComputers = [];
 
 // Particle system settings
 const SPHERE_RADIUS = 80; // Base radius for particle systems
 const LOADING_INTERVAL = 100; // Load particles in batches
+const BLACK_HOLE_MASS = 45; // Reduced from 200 to 45 (preffered strength)
 
 let today = new Date();
 today.setHours(0);
@@ -55,37 +56,9 @@ if (new URLSearchParams(window.location.search).get("clear")) {
         }
     };
 
+    // Simplify setupUI function to only handle the new window button
     function setupUI() {
-        const particleCountSlider = document.getElementById('particleCount');
-        const particleCountValue = document.getElementById('particleCountValue');
-        
-        if (particleCountSlider && particleCountValue) {
-            let debounceTimer = null;
-            
-            particleCountSlider.addEventListener('input', () => {
-                const newValue = parseInt(particleCountSlider.value);
-                particleCountValue.textContent = newValue.toLocaleString();
-                
-                // Use debouncing to prevent too many updates
-                clearTimeout(debounceTimer);
-                debounceTimer = setTimeout(() => {
-                    if (newValue !== PARTICLES_PER_SYSTEM) {
-                        console.log(`Changing particle count from ${PARTICLES_PER_SYSTEM} to ${newValue}`);
-                        PARTICLES_PER_SYSTEM = newValue;
-                        TEXTURE_WIDTH = Math.ceil(Math.sqrt(PARTICLES_PER_SYSTEM));
-                        TEXTURE_HEIGHT = TEXTURE_WIDTH;
-                        needsParticleUpdate = true;
-                    }
-                }, 300);
-            });
-            
-            // Initialize with default value
-            particleCountValue.textContent = PARTICLES_PER_SYSTEM.toLocaleString();
-        }
-        
-        // Rest of setupUI function...
-        
-        // Setup the new window button
+        // Only setup the new window button
         const newWindowBtn = document.getElementById('newWindowBtn');
         if (newWindowBtn) {
             newWindowBtn.addEventListener('click', () => {
@@ -93,13 +66,9 @@ if (new URLSearchParams(window.location.search).get("clear")) {
                 const offsetX = Math.floor(Math.random() * 300) - 150;
                 const offsetY = Math.floor(Math.random() * 300) - 150;
                 
-                // Pass the current particle count as a URL parameter
-                const url = new URL(window.location.href);
-                url.searchParams.set('particleCount', PARTICLES_PER_SYSTEM);
-                
-                // Open a new window with same URL
+                // Open a new window with the same URL (no parameters needed)
                 const newWindow = window.open(
-                    url.toString(), 
+                    window.location.href, 
                     '_blank',
                     `width=${window.outerWidth},height=${window.outerHeight},left=${window.screenX + offsetX},top=${window.screenY + offsetY}`
                 );
@@ -115,26 +84,6 @@ if (new URLSearchParams(window.location.search).get("clear")) {
                     newWindowBtn.style.transform = '';
                 }, 150);
             });
-        }
-        
-        // Check for particle count in URL params
-        const urlParams = new URLSearchParams(window.location.search);
-        const paramParticleCount = urlParams.get('particleCount');
-        if (paramParticleCount) {
-            const parsedCount = parseInt(paramParticleCount);
-            if (!isNaN(parsedCount) && parsedCount >= 100) {
-                PARTICLES_PER_SYSTEM = parsedCount;
-                TEXTURE_WIDTH = Math.ceil(Math.sqrt(PARTICLES_PER_SYSTEM));
-                TEXTURE_HEIGHT = TEXTURE_WIDTH;
-                
-                // Update the slider to match
-                if (particleCountSlider) {
-                    particleCountSlider.value = parsedCount;
-                }
-                if (particleCountValue) {
-                    particleCountValue.textContent = parsedCount.toLocaleString();
-                }
-            }
         }
     }
 
@@ -225,6 +174,7 @@ if (new URLSearchParams(window.location.search).get("clear")) {
             
             accVar.material.uniforms.time = { value: curTime };
             accVar.material.uniforms.radius = { value: SPHERE_RADIUS };
+            accVar.material.uniforms.blackHoleMass = { value: BLACK_HOLE_MASS };
             
             velVar.material.uniforms.time = { value: curTime };
             
@@ -440,47 +390,9 @@ if (new URLSearchParams(window.location.search).get("clear")) {
         } catch (error) {
             console.error("Error creating particle systems:", error);
             
-            // Fallback to simple spheres if particle creation fails
-            createFallbackSpheres();
-            
             setTimeout(() => {
                 isLoadingParticles = false;
             }, 200);
-        }
-    }
-
-    // Add a fallback method for when GPU particles fail
-    function createFallbackSpheres() {
-        const wins = windowManager.getWindows();
-        
-        for (let i = 0; i < wins.length; i++) {
-            const win = wins[i];
-            const position = new t.Vector3(
-                win.shape.x + (win.shape.w * 0.5),
-                win.shape.y + (win.shape.h * 0.5),
-                0
-            );
-            
-            // Create a colored sphere
-            const color = new t.Color().setHSL(i * 0.1, 1.0, 0.5);
-            const geometry = new t.SphereGeometry(50 + i * 10, 16, 16);
-            const material = new t.MeshBasicMaterial({
-                color: color,
-                wireframe: true
-            });
-            const sphere = new t.Mesh(geometry, material);
-            sphere.position.copy(position);
-            
-            const system = {
-                points: sphere,
-                index: i,
-                targetPosition: position.clone(),
-                isInitialized: true,
-                isFallback: true
-            };
-            
-            world.add(sphere);
-            particleSystems.push(system);
         }
     }
 
@@ -531,12 +443,7 @@ if (new URLSearchParams(window.location.search).get("clear")) {
             system.points.visible = true;
             
             // Handle different types of systems
-            if (system.isFallback) {
-                // Just rotate fallback spheres
-                system.points.rotation.x += 0.01;
-                system.points.rotation.y += 0.005;
-            }
-            else if (system.computation && system.computation.gpu) {
+            if (system.computation && system.computation.gpu) {
                 try {
                     const gpu = system.computation.gpu;
                     const vars = system.computation.variables;
