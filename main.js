@@ -1,5 +1,5 @@
 import WindowManager from './WindowManager.js'
-import {createPointsMaterial} from './GPU_Particles/materials.js'
+import {createPointsMaterial, createTetherMaterial} from './GPU_Particles/materials.js'
 import GPUComputationRenderer from './GPU_Particles/GPUComputationRenderer.js'
 import {createPosTargetShader, createAccShader, createVelShader, createPosShader} from './GPU_Particles/computeShaders.js'
 
@@ -12,15 +12,22 @@ let sceneOffsetTarget = {x: 0, y: 0};
 let sceneOffset = {x: 0, y: 0};
 
 // GPU computation variables
-const PARTICLES_PER_SYSTEM = 1000000; // Fixed at 1 million particles
-const TEXTURE_WIDTH = Math.ceil(Math.sqrt(PARTICLES_PER_SYSTEM));
+const MAX_PARTICLES_PER_SYSTEM = 1000000; // Maximum particles per system
+let PARTICLES_PER_SYSTEM = MAX_PARTICLES_PER_SYSTEM; // Dynamically adjusted
+const TEXTURE_WIDTH = Math.ceil(Math.sqrt(MAX_PARTICLES_PER_SYSTEM));
 const TEXTURE_HEIGHT = TEXTURE_WIDTH;
 let gpuComputers = [];
+
+// Window interaction variables
+let tethers = []; // Visual connections between windows
+const MAX_EXTERNAL_BLACK_HOLES = 8; // Maximum external black holes to consider
+let externalBlackHolePositions = [];
+let externalBlackHoleMasses = [];
 
 // Particle system settings
 const SPHERE_RADIUS = 80; // Base radius for particle systems
 const LOADING_INTERVAL = 100; // Load particles in batches
-const BLACK_HOLE_MASS = 45; // Reduced from 200 to 45 (preffered strength)
+const BLACK_HOLE_MASS = 45; // Base black hole mass
 
 let today = new Date();
 today.setHours(0);
@@ -118,8 +125,6 @@ if (new URLSearchParams(window.location.search).get("clear")) {
 
         renderer.domElement.setAttribute("id", "scene");
         document.body.appendChild(renderer.domElement);
-        
-        console.log("Scene setup complete");
     }
 
     function setupWindowManager() {
@@ -128,7 +133,10 @@ if (new URLSearchParams(window.location.search).get("clear")) {
         windowManager.setWinChangeCallback(windowsUpdated);
 
         // Custom metadata for each window
-        let metaData = {foo: "bar"};
+        let metaData = {
+            createdAt: Date.now(),
+            windowIndex: 0  // Will be set during update
+        };
 
         // Init window manager
         windowManager.init(metaData);
@@ -138,7 +146,150 @@ if (new URLSearchParams(window.location.search).get("clear")) {
     }
 
     function windowsUpdated() {
+        // Determine if we need to update particle systems
+        const windowCount = windowManager.getWindowCount();
+        
+        // Scale down particles based on window count (with some minimum)
+        const newParticleCount = Math.max(100000, Math.floor(MAX_PARTICLES_PER_SYSTEM / windowCount));
+        
+        // Only update if significant change (>10% difference)
+        if (Math.abs(PARTICLES_PER_SYSTEM - newParticleCount) / PARTICLES_PER_SYSTEM > 0.1) {
+            PARTICLES_PER_SYSTEM = newParticleCount;
+            console.log(`Adjusted particles to ${PARTICLES_PER_SYSTEM} based on ${windowCount} windows`);
+            needsParticleUpdate = true;
+        }
+        
         updateParticleSystems();
+        updateTethers();
+        updateExternalBlackHoles();
+    }
+
+    function updateTethers() {
+        // Remove old tethers
+        tethers.forEach(tether => {
+            if (tether.line) {
+                scene.remove(tether.line);
+                if (tether.line.geometry) tether.line.geometry.dispose();
+                if (tether.line.material) tether.line.material.dispose();
+            }
+        });
+        tethers = [];
+        
+        // Get all windows and their positions
+        const windows = windowManager.getWindows();
+        const thisWindowId = windowManager.getThisWindowID();
+        const thisWindowData = windowManager.getThisWindowData();
+        
+        if (!thisWindowData || !thisWindowData.shape) return;
+        
+        // Current window center
+        const center = {
+            x: thisWindowData.shape.x + thisWindowData.shape.w / 2,
+            y: thisWindowData.shape.y + thisWindowData.shape.h / 2,
+            z: 0
+        };
+        
+        // For each other window, create a tether
+        windows.forEach(win => {
+            if (win.id === thisWindowId) return;
+            
+            // Calculate other window center
+            const otherCenter = {
+                x: win.shape.x + win.shape.w / 2,
+                y: win.shape.y + win.shape.h / 2,
+                z: 0
+            };
+            
+            // Calculate distance for special effects
+            const distance = Math.sqrt(
+                Math.pow(otherCenter.x - center.x, 2) + 
+                Math.pow(otherCenter.y - center.y, 2)
+            );
+            
+            // Create curved path for more organic tether effect
+            const curveFactor = Math.min(0.3, 100 / distance);
+            const midPoint = new t.Vector3(
+                (otherCenter.x - center.x) * 0.5,
+                (otherCenter.y - center.y) * 0.5,
+                (Math.random() - 0.5) * distance * curveFactor
+            );
+            
+            // Create a curve path with slight arc
+            const curve = new t.QuadraticBezierCurve3(
+                new t.Vector3(0, 0, 0),
+                midPoint,
+                new t.Vector3(otherCenter.x - center.x, otherCenter.y - center.y, 0)
+            );
+            
+            // Create geometry from curve with multiple points for smoother curve
+            const points = curve.getPoints(20);
+            const lineGeometry = new t.BufferGeometry().setFromPoints(points);
+            
+            // Create enhanced tether material
+            const lineMaterial = createTetherMaterial();
+            
+            // Configure to show dashed pattern
+            const line = new t.Line(lineGeometry, lineMaterial);
+            line.computeLineDistances(); // Required for dashed lines
+            scene.add(line);
+            
+            // Store the tether
+            tethers.push({
+                fromId: thisWindowId,
+                toId: win.id,
+                line,
+                fromCenter: center,
+                toCenter: otherCenter,
+                lastUpdate: Date.now(),
+                distance: distance
+            });
+        });
+    }
+
+    function updateExternalBlackHoles() {
+        // Get positions of black holes from other windows
+        const externalSystems = windowManager.getExternalParticleSystems();
+        
+        // Reset arrays
+        externalBlackHolePositions = [];
+        externalBlackHoleMasses = [];
+        
+        // Get the thisWindow center position for relative positioning
+        const thisWindowData = windowManager.getThisWindowData();
+        if (!thisWindowData || !thisWindowData.shape) return;
+        
+        const thisCenter = {
+            x: thisWindowData.shape.x + thisWindowData.shape.w / 2,
+            y: thisWindowData.shape.y + thisWindowData.shape.h / 2,
+            z: 0
+        };
+        
+        // Add external black holes (limit to MAX_EXTERNAL_BLACK_HOLES)
+        let count = 0;
+        for (const [id, data] of Object.entries(externalSystems)) {
+            if (count >= MAX_EXTERNAL_BLACK_HOLES) break;
+            
+            if (data && data.blackHolePosition) {
+                // Position relative to this window
+                const relPos = {
+                    x: data.blackHolePosition.x - thisCenter.x,
+                    y: data.blackHolePosition.y - thisCenter.y,
+                    z: data.blackHolePosition.z || 0
+                };
+                
+                externalBlackHolePositions.push(new t.Vector3(relPos.x, relPos.y, relPos.z));
+                
+                // Decrease influence based on distance for stability
+                const distance = Math.sqrt(relPos.x * relPos.x + relPos.y * relPos.y);
+                const scaledMass = BLACK_HOLE_MASS * Math.min(1.0, 200 / Math.max(distance, 1));
+                externalBlackHoleMasses.push(scaledMass);
+                
+                count++;
+            }
+        }
+        
+        // Update the current window's position in the particle system data
+        windowManager.updateParticleSystem(thisCenter, PARTICLES_PER_SYSTEM);
     }
 
     // Setup GPU computation for a particle system
@@ -175,6 +326,11 @@ if (new URLSearchParams(window.location.search).get("clear")) {
             accVar.material.uniforms.time = { value: curTime };
             accVar.material.uniforms.radius = { value: SPHERE_RADIUS };
             accVar.material.uniforms.blackHoleMass = { value: BLACK_HOLE_MASS };
+            
+            // External black holes uniforms
+            accVar.material.uniforms.externalBlackHoleCount = { value: 0 };
+            accVar.material.uniforms.externalBlackHoles = { value: [] };
+            accVar.material.uniforms.externalMasses = { value: [] };
             
             velVar.material.uniforms.time = { value: curTime };
             
@@ -281,8 +437,7 @@ if (new URLSearchParams(window.location.search).get("clear")) {
             material.uniforms.hue = { value: hue };
             material.uniforms.radius = { value: system.radius };
             
-            // Initialize texture references, even if they'll be updated later
-            // This ensures the shader doesn't fail if it tries to access these before first compute
+            // Initialize texture references
             const gpu = computation.gpu;
             const vars = computation.variables;
             
@@ -382,7 +537,7 @@ if (new URLSearchParams(window.location.search).get("clear")) {
             
             needsParticleUpdate = false;
             
-            // Allow slider to work again after loading completes
+            // Allow update to work again after loading completes
             setTimeout(() => {
                 isLoadingParticles = false;
                 console.log("Particle systems updated successfully");
@@ -439,7 +594,7 @@ if (new URLSearchParams(window.location.search).get("clear")) {
             system.points.rotation.x = Math.sin(currentTime * 0.2) * 0.1;
             system.points.rotation.y = Math.cos(currentTime * 0.3) * 0.1;
             
-            // For all systems, ensure they're visible
+            // Ensure all systems are visible
             system.points.visible = true;
             
             // Handle different types of systems
@@ -458,6 +613,21 @@ if (new URLSearchParams(window.location.search).get("clear")) {
                     
                     if (vars.acc && vars.acc.material) {
                         vars.acc.material.uniforms.time.value = currentTime;
+                        
+                        // Update external black hole positions
+                        if (externalBlackHolePositions.length > 0) {
+                            vars.acc.material.uniforms.externalBlackHoleCount = { 
+                                value: Math.min(externalBlackHolePositions.length, MAX_EXTERNAL_BLACK_HOLES) 
+                            };
+                            vars.acc.material.uniforms.externalBlackHoles = { 
+                                value: externalBlackHolePositions 
+                            };
+                            vars.acc.material.uniforms.externalMasses = { 
+                                value: externalBlackHoleMasses 
+                            };
+                        } else {
+                            vars.acc.material.uniforms.externalBlackHoleCount = { value: 0 };
+                        }
                     }
                     
                     if (vars.vel && vars.vel.material) {
@@ -472,7 +642,7 @@ if (new URLSearchParams(window.location.search).get("clear")) {
                     // Increment frame counter
                     system.frame = (system.frame || 0) + 1;
                     
-                    // CRITICAL: Always compute every frame
+                    // Always compute every frame
                     gpu.compute();
                     
                     // Update material uniforms with computed textures
@@ -480,7 +650,7 @@ if (new URLSearchParams(window.location.search).get("clear")) {
                     if (material && material.uniforms) {
                         material.uniforms.time.value = currentTime;
                         
-                        // Make sure textures are properly assigned each frame
+                        // Make sure textures are properly assigned
                         if (vars.posTarget) {
                             material.uniforms.posTarget.value = gpu.getCurrentRenderTarget(vars.posTarget).texture;
                         }
@@ -506,10 +676,31 @@ if (new URLSearchParams(window.location.search).get("clear")) {
             }
             // If the system is created but computation is not ready yet, do nothing
             else if (!system.isInitialized) {
-                // System is still initializing, leave alone
+                // System is still initializing
                 console.log("Waiting for system", i, "to initialize");
             }
         }
+        
+        // Update tethers between windows with dynamic effects
+        tethers.forEach(tether => {
+            if (tether.line) {
+                // Make the line pulse slightly based on time and distance
+                const pulseFreq = 0.5 / (tether.distance * 0.001 + 1.0); // Faster pulse for closer windows
+                const pulseIntensity = 0.2 + 0.15 * Math.sin(currentTime * pulseFreq);
+                tether.line.material.opacity = 0.3 + pulseIntensity;
+                
+                // Dynamically adjust dash pattern based on activity
+                const dashScale = 0.5 + 0.5 * Math.sin(currentTime * 0.3);
+                tether.line.material.dashSize = 3 + dashScale;
+                tether.line.material.gapSize = 1 + (1 - dashScale) * 2;
+                tether.line.material.needsUpdate = true;
+                
+                // Gradually shift color based on distance
+                const hue = 0.55 + Math.sin(currentTime * 0.001) * 0.05;
+                const saturation = Math.min(1.0, 400 / tether.distance);
+                tether.line.material.color.setHSL(hue, saturation, 0.5);
+            }
+        });
         
         // Render the scene
         renderer.render(scene, camera);
@@ -528,7 +719,7 @@ if (new URLSearchParams(window.location.search).get("clear")) {
     }
 }
 
-// New helper function to initialize position texture
+// Helper function to initialize position texture
 function initPositionTexture(texture, systemIndex) {
     const radius = SPHERE_RADIUS + systemIndex * 15;
     const positions = texture.image.data;

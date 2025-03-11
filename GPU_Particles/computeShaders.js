@@ -8,6 +8,7 @@ function createPosTargetShader ()
 		${hash12}
 
 		uniform float time;
+		uniform float radius;
 
 		void main ()
 		{
@@ -18,7 +19,7 @@ function createPosTargetShader ()
 			vec3 pos = vec3(0.0);
 			float angle = (i / nPoints) * PI * 2.0;
 			float rad = sin(time * 0.0001) * 200.0;
-			rad = 80.0 + hash12(vec2(i * 0.123, i * 3.453)) * 80.0;
+			rad = radius + hash12(vec2(i * 0.123, i * 3.453)) * radius;
 			pos.x = cos(angle) * rad;
 			pos.y = sin(angle) * rad;
 			pos.z = 0.0;
@@ -28,7 +29,6 @@ function createPosTargetShader ()
 	`;
 }
 
-// Update the acceleration shader to include a strong central gravitational force
 function createAccShader() {
     return `
         ${PI}
@@ -36,7 +36,10 @@ function createAccShader() {
         ${hash12}
 
         uniform float time;
-        uniform float blackHoleMass;  // Add this uniform to receive the value from main.js
+        uniform float blackHoleMass;
+        uniform vec3 externalBlackHoles[8]; // Support up to 8 external black holes
+        uniform float externalMasses[8];
+        uniform int externalBlackHoleCount;
 
         void main() {
             float nPoints = resolution.x * resolution.y;
@@ -64,15 +67,14 @@ function createAccShader() {
             back *= ((1.0 + pow(cnoise(vec4(tar.xyz * 0.002, time * 0.0001)), 1.0)) / 2.0) * 0.003;
             a += back;
 
-            // BLACK HOLE EFFECT: Strong gravitational pull toward center
-            vec3 toCenter = vec3(0.0) - p.xyz;  // Vector pointing from particle to center (0,0,0)
+            // MAIN BLACK HOLE EFFECT: Strong gravitational pull toward center
+            vec3 toCenter = vec3(0.0) - p.xyz;  // Vector pointing from particle to center
             float distToCenter = length(toCenter);
             
             // Normalize direction vector
             toCenter = normalize(toCenter);
             
             // Inverse square law for gravity (stronger when closer)
-            // Use the uniform blackHoleMass instead of hardcoded value
             float minDist = 20.0; // To prevent particles from accelerating too much near the center
             float safeDistance = max(distToCenter, minDist);
             float gravityStrength = blackHoleMass / (safeDistance * safeDistance);
@@ -81,22 +83,39 @@ function createAccShader() {
             vec3 gravityForce = toCenter * gravityStrength;
             
             // Add angular momentum effect (allows for orbital motion)
-            // Cross product creates a perpendicular force for orbit
             vec3 orbital = cross(vec3(0.0, 0.0, 1.0), normalize(p.xyz));
-            
-            // Balance between direct pull and orbital force depends on distance
-            // Further particles have more orbital component to maintain stable orbits
             float orbitalFactor = 0.1 * min(1.0, distToCenter / 100.0);
-            
-            // Apply combined forces
             a += gravityForce + orbital * orbitalFactor;
+
+            // EXTERNAL BLACK HOLES: Apply gravity from other windows
+            for (int j = 0; j < 8; j++) {
+                if (j >= externalBlackHoleCount) break;
+                
+                vec3 externalPos = externalBlackHoles[j];
+                float mass = externalMasses[j];
+                
+                vec3 toExternal = externalPos - p.xyz;
+                float distToExternal = length(toExternal);
+                
+                if (distToExternal > 0.1) {
+                    // Apply inverse square law with reduced effect for external black holes
+                    float safeExternalDist = max(distToExternal, minDist * 2.0);
+                    float externalStrength = mass / (safeExternalDist * safeExternalDist);
+                    
+                    // Add force toward external black hole
+                    a += normalize(toExternal) * externalStrength * 0.5;
+                    
+                    // Create some swirling effect around external black holes
+                    vec3 externalOrbital = cross(vec3(0.0, 0.0, 1.0), normalize(toExternal));
+                    a += externalOrbital * externalStrength * 0.03;
+                }
+            }
 
             gl_FragColor = vec4(a, 1.0);
         }
     `;
 }
 
-// Update the velocity shader to ensure stable orbits
 function createVelShader() {
     return `
         ${PI}
@@ -116,7 +135,6 @@ function createVelShader() {
             v += a;
             
             // Distance-based damping
-            // Less damping for particles in orbital zones to maintain momentum
             float distToCenter = length(p.xyz);
             float orbitalZone = clamp((distToCenter - 30.0) / 100.0, 0.0, 1.0);
             float dampingFactor = mix(0.97, 0.995, orbitalZone);
@@ -137,7 +155,6 @@ function createVelShader() {
 function createPosShader ()
 {
 	return `
-
 		${PI}
 
 		uniform float time;
@@ -165,6 +182,5 @@ function createPosShader ()
 		}
 	`;
 }
-
 
 export {createPosTargetShader, createAccShader, createVelShader, createPosShader};
