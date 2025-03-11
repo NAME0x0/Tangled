@@ -6,12 +6,10 @@ class WindowManager
 	#winData;
 	#winShapeChangeCallback;
 	#winChangeCallback;
-	#particleSystemData; // New property to store particle system data
 	
 	constructor ()
 	{
 		let that = this;
-		this.#particleSystemData = {};
 
 		// event listener for when localStorage is changed from another window
 		addEventListener("storage", (event) => 
@@ -28,17 +26,6 @@ class WindowManager
 					if (that.#winChangeCallback) that.#winChangeCallback();
 				}
 			}
-			
-			// Listen for particle system data updates
-			if (event.key == "particleSystems") {
-				try {
-					that.#particleSystemData = JSON.parse(event.newValue) || {};
-					// Trigger callback for particle data update if needed
-					if (that.#winChangeCallback) that.#winChangeCallback();
-				} catch (e) {
-					console.error("Error parsing particle system data:", e);
-				}
-			}
 		});
 
 		// event listener for when current window is about to ble closed
@@ -48,13 +35,6 @@ class WindowManager
 
 			//remove this window from the list and update local storage
 			that.#windows.splice(index, 1);
-			
-			// Remove this window's particle data
-			if (that.#particleSystemData[that.#id]) {
-				delete that.#particleSystemData[that.#id];
-				that.updateParticleSystemsLocalStorage();
-			}
-			
 			that.updateWindowsLocalStorage();
 		});
 	}
@@ -85,8 +65,6 @@ class WindowManager
 		this.#windows = JSON.parse(localStorage.getItem("windows")) || [];
 		this.#count= localStorage.getItem("count") || 0;
 		this.#count++;
-		
-		this.#particleSystemData = JSON.parse(localStorage.getItem("particleSystems")) || {};
 
 		this.#id = this.#count;
 		let shape = this.getWinShape();
@@ -95,26 +73,6 @@ class WindowManager
 
 		localStorage.setItem("count", this.#count);
 		this.updateWindowsLocalStorage();
-	}
-
-	// Update particle system data for this window
-	updateParticleSystem(blackHolePosition, particleCount) {
-		if (!this.#particleSystemData) {
-			this.#particleSystemData = {};
-		}
-		
-		this.#particleSystemData[this.#id] = {
-			blackHolePosition: blackHolePosition,
-			particleCount: particleCount,
-			lastUpdate: Date.now()
-		};
-		
-		this.updateParticleSystemsLocalStorage();
-	}
-	
-	// Save particle system data to localStorage
-	updateParticleSystemsLocalStorage() {
-		localStorage.setItem("particleSystems", JSON.stringify(this.#particleSystemData));
 	}
 
 	getWinShape ()
@@ -161,16 +119,6 @@ class WindowManager
 			//console.log(windows);
 			if (this.#winShapeChangeCallback) this.#winShapeChangeCallback();
 			this.updateWindowsLocalStorage();
-			
-			// Update particle system position when window moves
-			if (this.#particleSystemData[this.#id]) {
-				this.#particleSystemData[this.#id].blackHolePosition = {
-					x: winShape.x + winShape.w / 2,
-					y: winShape.y + winShape.h / 2,
-					z: 0
-				};
-				this.updateParticleSystemsLocalStorage();
-			}
 		}
 	}
 
@@ -189,23 +137,6 @@ class WindowManager
 		return this.#windows;
 	}
 
-	getParticleSystems() {
-		return this.#particleSystemData || {};
-	}
-	
-	getExternalParticleSystems() {
-		const result = {};
-		const currentId = this.#id;
-		
-		for (const [id, data] of Object.entries(this.#particleSystemData)) {
-			if (id != currentId) {
-				result[id] = data;
-			}
-		}
-		
-		return result;
-	}
-
 	getThisWindowData ()
 	{
 		return this.#winData;
@@ -214,10 +145,6 @@ class WindowManager
 	getThisWindowID ()
 	{
 		return this.#id;
-	}
-	
-	getWindowCount() {
-		return this.#windows.length;
 	}
 }
 
