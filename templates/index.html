@@ -1,0 +1,20 @@
+<!DOCTYPE html>  
+<html lang="en">  
+<head>  
+    <meta charset="UTF-8">  
+    <title>Entangled</title>  
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">  
+</head>  
+<body>  
+    <div id="canvas-container"></div>  
+    <div id="ui">  
+        <div class="slider-container">  
+            <label>Hue: <input type="range" id="hueSlider" min="0" max="1" step="0.01" value="0.5"></label>  
+        </div>  
+        <button id="spawnWindow">Spawn Entangled Window</button>  
+    </div>  
+    <script src="{{ url_for('static', filename='js/three.min.js') }}"></script>  
+    <script src="{{ url_for('static', filename='js/GPUComputationRenderer.js') }}"></script>  
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>  
+</body>  
+</html>
