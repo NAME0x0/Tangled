@@ -1,12 +1,13 @@
-from flask import Flask, render_template  
-from flask_cors import CORS  
+from flask import Flask, render_template
+from flask_cors import CORS
 
-app = Flask(__name__, static_folder="static", template_folder="templates")  
-CORS(app)  # Enable cross-origin requests  
+app = Flask(__name__)
+# Enable CORS for all routes to allow entangled windows to communicate
+CORS(app)
 
-@app.route('/')  
-def index():  
-    return render_template('index.html')  
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-if __name__ == '__main__':  
-    app.run(host='localhost', port=5000, debug=True)
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)

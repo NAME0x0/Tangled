@@ -1,14 +1,16 @@
 # Entangled Project
 
-An interactive art piece with synchronized 3D particle systems across multiple browser windows, based on Bjorn Staal's *Entangled*.
+An interactive art piece with synchronized 3D particle systems across multiple browser windows, based on Bjorn Staal's *Entangled*, with additional inspiration from [bgstaal/gpuparticles](https://github.com/bgstaal/gpuparticles).
 
 ## Features
 
 - Real-time GPU-accelerated particle simulation using `three.js` and `GPUComputationRenderer`
+- Advanced curl noise algorithms for organic, fluid-like particle movement
 - Cross-window synchronization via `localStorage` with an "entanglement value" derived from particle positions
 - Dynamic window spawning with bidirectional influence between paired systems
 - Customizable particle color via HSL slider
 - Responsive design with GPU texture resizing
+- Velocity-based particle coloring for enhanced visual impact
 
 ## Prerequisites
 
@@ -57,7 +59,7 @@ An interactive art piece with synchronized 3D particle systems across multiple b
 - Move your mouse to interact with the particles
 - Use the Hue slider to change the color of the particles
 - Click "Spawn Entangled Window" to create a new window that synchronizes with the current one
-- Watch as particle systems in different windows influence each other
+- Watch as particle systems in different windows influence each other through entanglement forces
 
 ## Troubleshooting
 
@@ -65,14 +67,17 @@ An interactive art piece with synchronized 3D particle systems across multiple b
 |-------|----------|
 | Black screen | Confirm `three.min.js` and `GPUComputationRenderer.js` are in `static/js/` |
 | No synchronization | Enable CORS in Flask and disable browser security flags (e.g., `chrome://flags/#block-insecure-private-network-requests`) |
-| Low FPS | Reduce `PARTICLE_COUNT` to 4096 (64x64 grid) in `main.js` |
+| Low FPS | Reduce `PARTICLE_COUNT` to 16384 (128x128 grid) in `main.js` |
+| GPU compatibility issues | The system will automatically fall back to CPU mode with fewer particles |
 
 ## Performance Optimization
 
 - Particle sampling for `localStorage` sync is limited to small texture regions
 - Particle count is optimized for balance between visual density and performance
 - Damping factors prevent exponential growth of forces between windows
+- Velocity limits prevent unstable particle behavior
+- Curl noise provides organic movement patterns while maintaining computational efficiency
 
 ## Credits
 
-Based on the concept by Bjorn Staal. Implementation follows the specification from the Entangled Project.
+Based on the concept by Bjorn Staal. Implementation follows the specification from the Entangled Project, with additional techniques inspired by [bgstaal/gpuparticles](https://github.com/bgstaal/gpuparticles) (MIT License).

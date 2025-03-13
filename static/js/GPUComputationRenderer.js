@@ -501,4 +501,22 @@ class GPUComputationRenderer {
 
 }
 
+/**
+ * GPUComputationRenderer - This is a compatibility file that uses the global implementation
+ */
+
+// This file exists to match the references in documentation
+// The actual implementation is in GPUComputationRendererGlobal.js
+console.log("GPUComputationRenderer.js loaded - using global implementation");
+
+// If the global version isn't loaded yet, provide a warning
+if (typeof window.GPUComputationRenderer === 'undefined') {
+    console.error("Error: GPUComputationRendererGlobal.js must be loaded before this file");
+}
+
+// For ES module compatibility
+if (typeof exports !== 'undefined') {
+    exports.GPUComputationRenderer = window.GPUComputationRenderer;
+}
+
 export { GPUComputationRenderer };

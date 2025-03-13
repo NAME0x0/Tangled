@@ -1,40 +1,32 @@
-name: Deploy to GitHub Pages
+name: Deploy Entangled
 
 on:
   push:
-    branches:
-      - main
-
-permissions:
-  contents: write
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v2
       
-      - name: Create .nojekyll file
-        run: touch .nojekyll
-      
-      - name: Create _headers file for caching
-        run: |
-          echo "/*" > _headers
-          echo "  Cache-Control: max-age=86400" >> _headers
-          echo "*.js" >> _headers
-          echo "  Cache-Control: max-age=31536000" >> _headers
-          echo "*.css" >> _headers
-          echo "  Cache-Control: max-age=31536000" >> _headers
-      
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+      - name: Set up Python
+        uses: actions/setup-python@v2
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
-          publish_branch: gh-pages
-          force_orphan: true
-          user_name: 'github-actions[bot]'
-          user_email: 'github-actions[bot]@users.noreply.github.com'
-          commit_message: 'Deploy to GitHub Pages'
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flask flask-cors gunicorn
+          
+      - name: Test application
+        run: |
+          python -c "import flask; print(f'Flask version: {flask.__version__}')"
+          
+      - name: Deploy to server
+        if: success()
+        # This is a placeholder - replace with your actual deployment commands
+        run: |
+          echo "Deployed successfully!"

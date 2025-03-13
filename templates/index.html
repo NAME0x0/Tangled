@@ -12,9 +12,21 @@
             <label>Hue: <input type="range" id="hueSlider" min="0" max="1" step="0.01" value="0.5"></label>  
         </div>  
         <button id="spawnWindow">Spawn Entangled Window</button>  
-    </div>  
-    <script src="{{ url_for('static', filename='js/three.min.js') }}"></script>  
-    <script src="{{ url_for('static', filename='js/GPUComputationRenderer.js') }}"></script>  
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>  
+    </div>
+    
+    <!-- Load Three.js first -->
+    <script src="{{ url_for('static', filename='js/three.min.js') }}"></script>
+    
+    <!-- Use the global version of GPUComputationRenderer -->
+    <script src="{{ url_for('static', filename='js/GPUComputationRendererGlobal.js') }}"></script>
+    
+    <!-- Verify scripts are loaded properly -->
+    <script>
+        console.log("THREE available:", typeof THREE !== 'undefined');
+        console.log("GPUComputationRenderer available:", typeof GPUComputationRenderer !== 'undefined');
+    </script>
+    
+    <!-- Load main app script -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>  
 </html>
