@@ -1,898 +1,776 @@
-// Generate a unique window ID
-const WINDOW_ID = Math.random().toString(36).slice(2);
-let pairedWindows = [];
+// Import Three.js
+import * as THREE from 'three';
 
-// Get paired window ID from URL if available
-const urlParams = new URLSearchParams(window.location.search);
-const pairId = urlParams.get('pairId');
-if (pairId) {
-    pairedWindows.push(pairId);
-    localStorage.setItem('entangledPairs', JSON.stringify(pairedWindows));
-} else {
-    // Initialize from localStorage if exists
-    const storedPairs = localStorage.getItem('entangledPairs');
-    if (storedPairs) pairedWindows = JSON.parse(storedPairs);
-}
+// Constants and configuration - modified to match description
+const PARTICLE_COUNT = 15000; // Reduced to match description's "10,000 to 1 million"
+const SAMPLE_COUNT = 256; // Increased to 16x16 per description (for entanglement calculation)
+const BASE_RADIUS = 2.0; // Set initial distribution radius to 2.0 as per description
+const DAMPENING_FACTOR = 0.97; // Increased dampening to prevent drift
+const ENTANGLEMENT_FORCE = 0.01; // Force of entanglement attraction
+const NOISE_SCALE = 0.08; // Reduced noise for more predictable orbits
+const DEFAULT_HUE = 128; // Default hue (blue-green) as per description
+const CENTER_FORCE = 0.003; // Increased center attraction force
+const TARGET_FORCE = 0.0003; // Reduced target force
+const CENTER_STORAGE_KEY = 'electron_visualization_center'; // Key for storing center position
+const INITIAL_STABILIZATION_TICKS = 50; // Number of simulation ticks to run on init for stability
 
-// -------------------- SCENE SETUP --------------------
-// Scene
+// Black hole constants
+const BLACK_HOLE_RADIUS = 0.25; // Visual size of black hole
+const BLACK_HOLE_MASS = 10.0; // Mass for gravitational calculations
+const GRAVITATIONAL_CONSTANT = 0.015; // Strength of gravity
+const EVENT_HORIZON_RADIUS = 0.3; // Distance at which particles are consumed
+const ACCRETION_DISK_INTENSITY = 0.7; // Intensity of the glowing accretion disk
+const ORBITAL_VELOCITY_FACTOR = 0.8; // Initial orbital velocity factor
+
+// Scene setup
 const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.position.z = 5;
-
-// Renderer
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ 
+    antialias: true,
+    alpha: true,
+    powerPreference: 'high-performance'
+});
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 0);
 renderer.setPixelRatio(window.devicePixelRatio);
-document.getElementById('canvas-container').appendChild(renderer.domElement);
+document.getElementById('container').appendChild(renderer.domElement);
 
-// Debug helper for WebGL context
-function checkWebGLSupport() {
+// Add ambient light for better visibility
+const ambientLight = new THREE.AmbientLight(0x333344, 1.0);
+scene.add(ambientLight);
+
+// Center position for particle system - determined based on screen center
+let centerPosition = new THREE.Vector3(0, 0, 0);
+let screenCenterPosition = new THREE.Vector3(0, 0, 0);
+
+// Calculate the center of the screen in world coordinates
+function calculateScreenCenter() {
+    // Get the center of the screen in normalized device coordinates (-1 to +1)
+    screenCenterPosition.set(0, 0, 0);
+    
+    // Convert NDC to world coordinates through camera unprojection
+    screenCenterPosition.unproject(camera);
+    
+    // For perspective camera, we need to set z to a value in front of the camera
+    screenCenterPosition.z = 0;
+    
+    console.log("Screen center calculated at:", screenCenterPosition);
+    return screenCenterPosition;
+}
+
+// Initialize or load center position from localStorage
+function initializeCenter() {
     try {
-        console.log("Checking WebGL capabilities...");
-        console.log("WebGL2 supported:", renderer.capabilities.isWebGL2);
+        // Always calculate the current screen center first
+        calculateScreenCenter();
         
-        // Safely check for extensions
-        let extensionsSupported = false;
-        try {
-            // In some Three.js versions, the context is accessible this way
-            if (renderer.getContext) {
-                const context = renderer.getContext();
-                if (context && context.getSupportedExtensions) {
-                    console.log("Available WebGL extensions:", context.getSupportedExtensions());
-                    extensionsSupported = true;
-                }
-            }
-        } catch (extError) {
-            console.log("Could not access WebGL extensions listing:", extError);
+        // Check if we have a stored center
+        const storedCenter = localStorage.getItem(CENTER_STORAGE_KEY);
+        if (storedCenter) {
+            const center = JSON.parse(storedCenter);
+            // Use the screen center z-coordinate to ensure visibility
+            centerPosition.set(center.x, center.y, screenCenterPosition.z);
+            console.log('Loaded center position from localStorage:', centerPosition);
+        } else {
+            // Use screen center as the initial center
+            centerPosition.copy(screenCenterPosition);
+            saveCenter();
+            console.log('Set initial center position to screen center:', centerPosition);
         }
-        
-        if (!renderer.capabilities.isWebGL2) {
-            console.error("WebGL 2 not supported. GPUComputationRenderer requires WebGL 2.");
-            document.getElementById('canvas-container').innerHTML = 
-                '<div style="color:red; padding:20px;">WebGL 2 not supported by your browser. Please use Chrome 95+, Firefox 90+ or another WebGL 2 compatible browser.</div>';
-            return false;
-        }
-        
-        // Check for float texture support more safely
-        let floatTextureSupported = false;
-        try {
-            // Try checking for extension support through renderer capabilities and extensions
-            if (renderer.extensions) {
-                const floatExtensions = {
-                    'EXT_color_buffer_float': renderer.extensions.get('EXT_color_buffer_float'),
-                    'OES_texture_float_linear': renderer.extensions.get('OES_texture_float_linear'),
-                    'OES_texture_float': renderer.extensions.get('OES_texture_float')
-                };
-                
-                console.log("Float texture extensions status:", floatExtensions);
-                
-                if (floatExtensions['EXT_color_buffer_float'] || floatExtensions['OES_texture_float']) {
-                    floatTextureSupported = true;
-                }
-            }
-        } catch (extensionError) {
-            console.log("Could not check float texture support through extensions:", extensionError);
-        }
-        
-        // Additional capability check
-        if (renderer.capabilities) {
-            console.log("Floating point textures capability:", renderer.capabilities.floatFragmentTextures);
-            if (renderer.capabilities.floatFragmentTextures) {
-                floatTextureSupported = true;
-            }
-        }
-        
-        if (!floatTextureSupported) {
-            console.warn("Float texture rendering may not be supported. Trying half float...");
-        }
-        
-        console.log("WebGL support verification complete");
-        return true;
     } catch (e) {
-        console.error("WebGL error:", e);
-        document.getElementById('canvas-container').innerHTML = 
-            '<div style="color:red; padding:20px;">WebGL error: ' + e.message + '</div>';
-        return false;
+        console.error('Error loading center position from localStorage:', e);
+        // Fallback to screen center
+        centerPosition.copy(screenCenterPosition);
     }
 }
 
-// -------------------- GPU COMPUTATION SETUP --------------------
-const PARTICLE_COUNT = 65536; // 256x256 grid
-const GRID_SIZE = 256;
-// Reduced grid size for better compatibility
-const SAFE_GRID_SIZE = 128; 
-let gpuCompute;
-let positionVariable, velocityVariable;
-let particleSystem;
-let tempArray = new Float32Array(4); // For reading render target
+// Save center position to localStorage
+function saveCenter() {
+    try {
+        const centerData = {
+            x: centerPosition.x,
+            y: centerPosition.y,
+            z: centerPosition.z
+        };
+        localStorage.setItem(CENTER_STORAGE_KEY, JSON.stringify(centerData));
+    } catch (e) {
+        console.error('Error saving center position to localStorage:', e);
+    }
+}
 
-// Ensure GPUComputationRenderer is accessible
-function getGPUComputationRenderer() {
-    // Check if GPUComputationRenderer is available as a global
-    if (typeof GPUComputationRenderer !== 'undefined') {
-        console.log("Using global GPUComputationRenderer");
-        return GPUComputationRenderer;
-    }
+// Create black hole visualization
+function createBlackHole() {
+    // Create the black hole sphere (event horizon)
+    const blackHoleGeometry = new THREE.SphereGeometry(BLACK_HOLE_RADIUS, 32, 32);
+    const blackHoleMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.9
+    });
+    const blackHole = new THREE.Mesh(blackHoleGeometry, blackHoleMaterial);
+    blackHole.position.copy(centerPosition);
+    scene.add(blackHole);
     
-    // Check if it's been attached to THREE
-    if (THREE && typeof THREE.GPUComputationRenderer !== 'undefined') {
-        console.log("Using THREE.GPUComputationRenderer");
-        return THREE.GPUComputationRenderer;
-    }
+    // Create gravitational lensing effect (distortion ring)
+    const distortionRingGeometry = new THREE.RingGeometry(
+        BLACK_HOLE_RADIUS * 1.1, 
+        BLACK_HOLE_RADIUS * 1.6, 
+        64
+    );
+    const distortionRingMaterial = new THREE.MeshBasicMaterial({
+        color: 0x6699ff,
+        transparent: true,
+        opacity: 0.2,
+        side: THREE.DoubleSide
+    });
+    const distortionRing = new THREE.Mesh(distortionRingGeometry, distortionRingMaterial);
+    distortionRing.position.copy(centerPosition);
+    distortionRing.rotation.x = Math.PI / 2;
+    scene.add(distortionRing);
     
-    // Last resort - try to import it manually if it's an ES module
-    console.error("GPUComputationRenderer not found. Creating fallback implementation.");
+    // Create accretion disk (glowing ring around black hole)
+    const accretionDiskGeometry = new THREE.RingGeometry(
+        BLACK_HOLE_RADIUS * 1.2,
+        BLACK_HOLE_RADIUS * 3.0,
+        64
+    );
     
-    // Create a basic fallback that will show an error but not crash
-    return function FallbackGPURenderer() {
-        document.getElementById('canvas-container').innerHTML = 
-            '<div style="color:red; padding:20px;">ERROR: GPUComputationRenderer could not be loaded. Please check browser console for details.</div>';
-        throw new Error("GPUComputationRenderer not available");
+    // Custom shader material for accretion disk
+    const accretionDiskMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            time: { value: 0 },
+            innerRadius: { value: BLACK_HOLE_RADIUS * 1.2 },
+            outerRadius: { value: BLACK_HOLE_RADIUS * 3.0 },
+            intensity: { value: ACCRETION_DISK_INTENSITY }
+        },
+        vertexShader: `
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            uniform float time;
+            uniform float innerRadius;
+            uniform float outerRadius;
+            uniform float intensity;
+            varying vec2 vUv;
+            
+            void main() {
+                // Calculate radius (0 to 1) within the ring
+                float radius = distance(vUv, vec2(0.5, 0.5)) * 2.0;
+                
+                // Normalized position within the ring (0 at inner edge, 1 at outer edge)
+                float normalizedPos = (radius - 0.5) * 2.0;
+                
+                // Create swirling pattern based on angle and time
+                float angle = atan(vUv.y - 0.5, vUv.x - 0.5);
+                float swirl = sin(angle * 8.0 + time * 0.5 + normalizedPos * 5.0) * 0.5 + 0.5;
+                
+                // Gradient from inner to outer edge (hotter near black hole)
+                float heat = mix(1.0, 0.0, normalizedPos);
+                
+                // Combine effects
+                vec3 color = mix(
+                    vec3(0.8, 0.5, 0.0), // Orange-red (inner, hotter)
+                    vec3(0.1, 0.2, 0.8), // Blue (outer, cooler)
+                    normalizedPos
+                );
+                
+                // Apply swirl pattern
+                color *= (0.7 + swirl * 0.4);
+                
+                // Fade out at edges
+                float alpha = (1.0 - normalizedPos) * intensity;
+                alpha *= (0.7 + swirl * 0.3);
+                
+                gl_FragColor = vec4(color, alpha);
+            }
+        `,
+        transparent: true,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
+    
+    const accretionDisk = new THREE.Mesh(accretionDiskGeometry, accretionDiskMaterial);
+    accretionDisk.position.copy(centerPosition);
+    accretionDisk.rotation.x = Math.PI / 2;
+    scene.add(accretionDisk);
+    
+    // Return references for animation
+    return {
+        blackHole,
+        distortionRing,
+        accretionDisk
     };
 }
 
-function initGPUComputation() {
-    const gpu = getGPUComputationRenderer();
-    if (!gpu) return false;
+// Create point particle texture with soft edges
+const particleTexture = new THREE.CanvasTexture(generateParticleTexture());
+
+// Function to generate a soft particle texture
+function generateParticleTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const context = canvas.getContext('2d');
+
+    // Clear canvas
+    context.fillStyle = 'black';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Create radial gradient
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const radius = canvas.width / 2;
     
-    gpuCompute = gpu;
-    
-    // Create position texture with initial random positions
-    const posTexture = gpuCompute.createTexture();
-    const velTexture = gpuCompute.createTexture();
-    
-    fillPositionTexture(posTexture);
-    fillVelocityTexture(velTexture);
-    
-    // Add variables to GPU compute
-    positionVariable = gpuCompute.addVariable('texturePosition', positionShader(), posTexture);
-    velocityVariable = gpuCompute.addVariable('textureVelocity', velocityShader(), velTexture);
-    
-    // Set variable dependencies
-    gpuCompute.setVariableDependencies(positionVariable, [positionVariable, velocityVariable]);
-    gpuCompute.setVariableDependencies(velocityVariable, [positionVariable, velocityVariable]);
-    
-    // Add custom uniforms
-    const posUniforms = positionVariable.material.uniforms;
-    const velUniforms = velocityVariable.material.uniforms;
-    
-    posUniforms.time = { value: 0.0 };
-    posUniforms.delta = { value: 0.0 };
-    
-    velUniforms.time = { value: 0.0 };
-    velUniforms.delta = { value: 0.0 };
-    velUniforms.mousePos = { value: new THREE.Vector3(0, 0, 0) };
-    velUniforms.mouseForce = { value: 0.0 };
-    velUniforms.entanglementForce = { value: new THREE.Vector3(0, 0, 0) };
-    
-    // Texture size check and init
-    const error = gpuCompute.init();
-    if (error !== null) {
-        console.error('GPUComputationRenderer error:', error);
-        return false;
-    }
-    
-    return true;
-}
-
-// Add advanced noise functions for particle animation
-const noisePermute = `vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}`;
-const noise3D = `
-${noisePermute}
-vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
-
-float snoise(vec3 v){
-    const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
-    const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
-
-    vec3 i  = floor(v + dot(v, C.yyy) );
-    vec3 x0 =   v - i + dot(i, C.xxx) ;
-
-    vec3 g = step(x0.yzx, x0.xyz);
-    vec3 l = 1.0 - g;
-    vec3 i1 = min( g.xyz, l.zxy );
-    vec3 i2 = max( g.xyz, l.zxy );
-
-    vec3 x1 = x0 - i1 + C.xxx;
-    vec3 x2 = x0 - i2 + C.yyy;
-    vec3 x3 = x0 - D.yyy;
-
-    i = mod( i, 289.0 );
-    vec4 p = permute( permute( permute(
-               i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
-             + i.y + vec4(0.0, i1.y, i2.y, 1.0 ))
-             + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
-
-    float n_ = 0.142857142857;
-    vec3  ns = n_ * D.wyz - D.xzx;
-
-    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
-
-    vec4 x_ = floor(j * ns.z);
-    vec4 y_ = floor(j - 7.0 * x_ );
-
-    vec4 x = x_ *ns.x + ns.yyyy;
-    vec4 y = y_ *ns.x + ns.yyyy;
-    vec4 h = 1.0 - abs(x) - abs(y);
-
-    vec4 b0 = vec4( x.xy, y.xy );
-    vec4 b1 = vec4( x.zw, y.zw );
-
-    vec4 s0 = floor(b0)*2.0 + 1.0;
-    vec4 s1 = floor(b1)*2.0 + 1.0;
-    vec4 sh = -step(h, vec4(0.0));
-
-    vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
-    vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
-
-    vec3 p0 = vec3(a0.xy,h.x);
-    vec3 p1 = vec3(a0.zw,h.y);
-    vec3 p2 = vec3(a1.xy,h.z);
-    vec3 p3 = vec3(a1.zw,h.w);
-
-    vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
-    p0 *= norm.x;
-    p1 *= norm.y;
-    p2 *= norm.z;
-    p3 *= norm.w;
-
-    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
-    m = m * m;
-    return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1),
-                                  dot(p2,x2), dot(p3,x3) ) );
-}
-
-vec3 curlNoise(vec3 p) {
-    const float step = 0.01;
-    float ddx = snoise(p + vec3(step, 0.0, 0.0)) - snoise(p - vec3(step, 0.0, 0.0));
-    float ddy = snoise(p + vec3(0.0, step, 0.0)) - snoise(p - vec3(0.0, step, 0.0));
-    float ddz = snoise(p + vec3(0.0, 0.0, step)) - snoise(p - vec3(0.0, 0.0, step));
-    
-    return normalize(vec3(
-        ddy - ddz,
-        ddz - ddx,
-        ddx - ddy
-    ));
-}
-`;
-
-// Random hash function for initialization
-const hashFunctions = `
-float hash12(vec2 p) {
-  vec3 p3  = fract(vec3(p.xyx) * .1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}`;
-
-// Fill textures with initial data
-function fillPositionTexture(texture) {
-    const pixels = texture.image.data;
-    const size = GRID_SIZE * GRID_SIZE;
-    
-    for (let i = 0; i < size; i++) {
-        const i4 = i * 4;
-        
-        // Create particles in a spherical distribution
-        const radius = 1.0 * Math.random();
-        const theta = Math.random() * Math.PI * 2;
-        const phi = Math.acos((Math.random() * 2) - 1);
-        
-        pixels[i4 + 0] = radius * Math.sin(phi) * Math.cos(theta); // x
-        pixels[i4 + 1] = radius * Math.sin(phi) * Math.sin(theta); // y
-        pixels[i4 + 2] = radius * Math.cos(phi); // z
-        pixels[i4 + 3] = 1.0; // w (life)
-    }
-}
-
-function fillVelocityTexture(texture) {
-    const pixels = texture.image.data;
-    const size = GRID_SIZE * GRID_SIZE;
-    
-    for (let i = 0; i < size; i++) {
-        const i4 = i * 4;
-        
-        // Initial velocities - small random values
-        pixels[i4 + 0] = (Math.random() - 0.5) * 0.01;
-        pixels[i4 + 1] = (Math.random() - 0.5) * 0.01;
-        pixels[i4 + 2] = (Math.random() - 0.5) * 0.01;
-        pixels[i4 + 3] = 0.0; // w (unused)
-    }
-}
-
-// -------------------- SHADER DEFINITIONS --------------------
-function positionShader() {
-    return `
-    uniform float time;
-    uniform float delta;
-
-    void main() {
-        // Get current position and velocity
-        vec4 pos = texture2D(texturePosition, gl_FragCoord.xy / resolution.xy);
-        vec4 vel = texture2D(textureVelocity, gl_FragCoord.xy / resolution.xy);
-        
-        // Update position based on velocity
-        pos.xyz += vel.xyz * delta;
-        
-        // Store updated position
-        gl_FragColor = pos;
-    }
-    `;
-}
-
-function velocityShader() {
-    return `
-    ${noise3D}
-    uniform float time;
-    uniform float delta;
-    uniform vec3 mousePos;
-    uniform float mouseForce;
-    uniform vec3 entanglementForce;
-
-    void main() {
-        // Get current position and velocity
-        vec4 pos = texture2D(texturePosition, gl_FragCoord.xy / resolution.xy);
-        vec4 vel = texture2D(textureVelocity, gl_FragCoord.xy / resolution.xy);
-        
-        // Apply curl noise for organic movement
-        vec3 noisePos = pos.xyz * 0.5 + time * 0.05;
-        vec3 curl = curlNoise(noisePos) * 0.3;
-        
-        // Apply mouse attraction force if mouse is active
-        vec3 mouseDir = mousePos - pos.xyz;
-        float mouseDist = length(mouseDir);
-        
-        if (mouseForce > 0.0 && mouseDist < 2.0) {
-            float mouseStrength = mouseForce * (1.0 - mouseDist / 2.0);
-            mouseDir = normalize(mouseDir) * mouseStrength;
-            curl += mouseDir;
-        }
-        
-        // Apply entanglement force
-        if (length(entanglementForce) > 0.0) {
-            curl += entanglementForce * 0.05;
-        }
-        
-        // Add a centering force to prevent particles from drifting too far
-        vec3 centerDir = -pos.xyz;
-        float centerDist = length(centerDir);
-        vec3 centerForce = normalize(centerDir) * centerDist * 0.01;
-        
-        // Update velocity with curl noise influence and damping
-        vel.xyz = vel.xyz * 0.95 + curl * delta * 2.0 + centerForce;
-        
-        // Limit velocity to prevent extreme movement
-        float speedLimit = 2.0;
-        float speed = length(vel.xyz);
-        if (speed > speedLimit) {
-            vel.xyz = vel.xyz * (speedLimit / speed);
-        }
-        
-        // Store updated velocity
-        gl_FragColor = vel;
-    }
-    `;
-}
-
-// -------------------- PARTICLE SYSTEM --------------------
-function createParticleSystem() {
-    try {
-        console.log("Creating particle system...");
-        
-        // Create geometry
-        const geometry = new THREE.BufferGeometry();
-        
-        // Create arrays for attributes
-        const positions = new Float32Array(PARTICLE_COUNT * 3);
-        const uvs = new Float32Array(PARTICLE_COUNT * 2);
-        
-        // Fill position and UV attributes
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-            // Initial positions (will be updated in render loop)
-            positions[i * 3] = 0;
-            positions[i * 3 + 1] = 0;
-            positions[i * 3 + 2] = 0;
-            
-            // UVs for lookup in position texture
-            const x = (i % GRID_SIZE) / GRID_SIZE;
-            const y = Math.floor(i / GRID_SIZE) / GRID_SIZE;
-            
-            uvs[i * 2] = x;
-            uvs[i * 2 + 1] = y;
-        }
-        
-        // Add attributes to geometry
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-        
-        // Create custom shader material
-        const material = new THREE.ShaderMaterial({
-            uniforms: {
-                positionTexture: { value: null },
-                velocityTexture: { value: null },
-                pointSize: { value: 1.5 },
-                particleColor: { value: new THREE.Color(0x88ccff) }
-            },
-            vertexShader: `
-                uniform sampler2D positionTexture;
-                uniform sampler2D velocityTexture;
-                uniform float pointSize;
-                
-                varying vec3 vVelocity;
-                
-                void main() {
-                    // Get position from texture
-                    vec4 posTemp = texture2D(positionTexture, uv);
-                    vec4 velTemp = texture2D(velocityTexture, uv);
-                    
-                    // Pass velocity to fragment shader
-                    vVelocity = velTemp.xyz;
-                    
-                    // Calculate point size based on distance to camera
-                    vec4 mvPosition = modelViewMatrix * vec4(posTemp.xyz, 1.0);
-                    float distanceToCamera = length(mvPosition.xyz);
-                    gl_PointSize = pointSize * (30.0 / distanceToCamera);
-                    
-                    // Project position
-                    gl_Position = projectionMatrix * mvPosition;
-                }
-            `,
-            fragmentShader: `
-                varying vec3 vVelocity;
-                uniform vec3 particleColor;
-                
-                void main() {
-                    // Calculate speed for coloring
-                    float speed = length(vVelocity);
-                    
-                    // Color gradient based on speed
-                    vec3 color = mix(particleColor * 0.8, vec3(1.0, 1.0, 1.0), min(speed * 2.0, 1.0));
-                    
-                    // Circular particle with soft edge
-                    float r = 0.0;
-                    vec2 cxy = 2.0 * gl_PointCoord - 1.0;
-                    r = dot(cxy, cxy);
-                    if (r > 1.0) {
-                        discard;
-                    }
-                    
-                    // Fade out towards edges
-                    float alpha = 1.0 - r;
-                    
-                    gl_FragColor = vec4(color, alpha);
-                }
-            `,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false,
-            transparent: true,
-        });
-        
-        // Create particle system and add to scene
-        particleSystem = new THREE.Points(geometry, material);
-        scene.add(particleSystem);
-        
-        console.log("Particle system created with", PARTICLE_COUNT, "particles");
-        return true;
-    } catch (e) {
-        console.error("Error creating particle system:", e);
-        return false;
-    }
-}
-
-// -------------------- FALLBACK SYSTEM --------------------
-function createFallbackSystem() {
-    console.log("Creating fallback particle system...");
-    
-    // Create a basic particle system without GPU computation
-    const geometry = new THREE.BufferGeometry();
-    const particleCount = 500; // Much smaller count for CPU
-    
-    // Create array of positions, colors, and sizes
-    const positions = new Float32Array(particleCount * 3);
-    const colors = new Float32Array(particleCount * 3);
-    
-    // Initialize with a simple spiral pattern
-    for (let i = 0; i < particleCount; i++) {
-        const angle = (i / particleCount) * Math.PI * 20;
-        const radius = 0.1 + (i / particleCount) * 3;
-        
-        // Position
-        positions[i * 3] = Math.cos(angle) * radius;
-        positions[i * 3 + 1] = Math.sin(angle) * radius;
-        positions[i * 3 + 2] = (Math.random() - 0.5) * 0.2;
-        
-        // Color - blue to cyan gradient
-        colors[i * 3] = 0.3 + (i / particleCount) * 0.4;
-        colors[i * 3 + 1] = 0.7 + (i / particleCount) * 0.3;
-        colors[i * 3 + 2] = 1.0;
-    }
-    
-    // Add attributes
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    
-    // Create material
-    const material = new THREE.PointsMaterial({
-        size: 0.15,
-        vertexColors: true,
-        blending: THREE.AdditiveBlending,
-        transparent: true,
-        opacity: 0.7,
-        sizeAttenuation: true
-    });
-    
-    // Create particles
-    particleSystem = new THREE.Points(geometry, material);
-    scene.add(particleSystem);
-    
-    console.log("Fallback system created with", particleCount, "particles");
-    
-    // Add reference sphere
-    const sphere = new THREE.Mesh(
-        new THREE.SphereGeometry(0.2, 16, 16),
-        new THREE.MeshBasicMaterial({ color: 0xff0000 })
+    const gradient = context.createRadialGradient(
+        centerX, centerY, 0,
+        centerX, centerY, radius
     );
-    scene.add(sphere);
     
-    return true;
+    // Simple white to transparent gradient for point-like particles
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+    gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
+    gradient.addColorStop(0.5, 'rgba(200, 200, 255, 0.5)');
+    gradient.addColorStop(1, 'rgba(0, 30, 100, 0)');
+
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    
+    return canvas;
 }
 
-// -------------------- ENTANGLEMENT SYNC --------------------
-function updateEntanglement() {
-    // Calculate average particle position
-    const avgPos = new THREE.Vector3();
-    
-    // Sample multiple positions for better representation
-    const samplePoints = 5;
-    let totalSampled = 0;
-    
-    for (let i = 0; i < samplePoints; i++) {
-        for (let j = 0; j < samplePoints; j++) {
-            // Sample at different areas of the texture
-            const x = Math.floor((i / samplePoints) * GRID_SIZE);
-            const y = Math.floor((j / samplePoints) * GRID_SIZE);
-            
-            renderer.readRenderTargetPixels(
-                gpuCompute.getCurrentRenderTarget(positionVariable),
-                x, y, 1, 1, 
-                tempArray
-            );
-            
-            avgPos.x += tempArray[0];
-            avgPos.y += tempArray[1];
-            avgPos.z += tempArray[2];
-            totalSampled++;
-        }
-    }
-    
-    // Calculate average
-    if (totalSampled > 0) {
-        avgPos.divideScalar(totalSampled);
-    }
+// Perlin noise implementation for natural movement
+function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+function lerp(a, b, t) { return a + t * (b - a); }
 
-    // Calculate average velocity for energy transfer
-    const avgVel = new THREE.Vector3();
+// Simplex noise implementation
+function noise3D(x, y, z) {
+    // Simple hash function
+    const simpleHash = (x, y, z) => {
+        return Math.sin(x * 12.9898 + y * 78.233 + z * 43.2364) * 43758.5453 % 1;
+    };
     
-    for (let i = 0; i < samplePoints; i++) {
-        for (let j = 0; j < samplePoints; j++) {
-            const x = Math.floor((i / samplePoints) * GRID_SIZE);
-            const y = Math.floor((j / samplePoints) * GRID_SIZE);
-            
-            renderer.readRenderTargetPixels(
-                gpuCompute.getCurrentRenderTarget(velocityVariable),
-                x, y, 1, 1, 
-                tempArray
-            );
-            
-            avgVel.x += tempArray[0];
-            avgVel.y += tempArray[1];
-            avgVel.z += tempArray[2];
-        }
-    }
+    // Get integer coordinates
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const zi = Math.floor(z);
     
-    if (totalSampled > 0) {
-        avgVel.divideScalar(totalSampled);
-    }
+    // Get fractional parts
+    const xf = x - xi;
+    const yf = y - yi;
+    const zf = z - zi;
+    
+    // Smooth interpolation factors
+    const u = fade(xf);
+    const v = fade(yf);
+    const w = fade(zf);
+    
+    // Hash coordinates of the 8 cube corners
+    const aaa = simpleHash(xi, yi, zi);
+    const aba = simpleHash(xi, yi+1, zi);
+    const aab = simpleHash(xi, yi, zi+1);
+    const abb = simpleHash(xi, yi+1, zi+1);
+    const baa = simpleHash(xi+1, yi, zi);
+    const bba = simpleHash(xi+1, yi+1, zi);
+    const bab = simpleHash(xi+1, yi, zi+1);
+    const bbb = simpleHash(xi+1, yi+1, zi+1);
+    
+    // Tri-linear interpolation
+    const x1 = lerp(
+        lerp(lerp(aaa, baa, u), lerp(aba, bba, u), v),
+        lerp(lerp(aab, bab, u), lerp(abb, bbb, u), v),
+        w
+    );
+    
+    return x1 * 2 - 1; // Transform from [0,1] to [-1,1]
+}
 
-    // Store our position and velocity for paired windows
-    localStorage.setItem(`entangled_${WINDOW_ID}`, JSON.stringify({
-        x: avgPos.x,
-        y: avgPos.y,
-        z: avgPos.z,
-        vx: avgVel.x,
-        vy: avgVel.y,
-        vz: avgVel.z
-    }));
+// Combined simplex noise function with balanced directional influence
+function simplex3D(x, y, z) {
+    // Ensure balanced noise by using different frequency components
+    const noise1 = noise3D(x * 0.01, y * 0.01, z * 0.01);
+    const noise2 = noise3D(x * 0.02, y * 0.02, z * 0.02) * 0.5;
+    const noise3 = noise3D(x * 0.04, y * 0.04, z * 0.04) * 0.25;
     
-    // Calculate net force from all paired windows
-    const netForce = new THREE.Vector3();
-    let pairsFound = 0;
+    // Calculate raw noise
+    let noiseValue = (noise1 + noise2 + noise3);
     
-    pairedWindows.forEach(id => {
-        const data = localStorage.getItem(`entangled_${id}`);
-        if (data) {
-            try {
-                const parsed = JSON.parse(data);
-                const otherPos = new THREE.Vector3(parsed.x, parsed.y, parsed.z);
-                const otherVel = new THREE.Vector3(parsed.vx || 0, parsed.vy || 0, parsed.vz || 0);
-                
-                // Calculate force based on distance and entanglement strength
-                const direction = new THREE.Vector3().subVectors(otherPos, avgPos);
-                const distance = direction.length();
-                
-                // Apply force based on inverse square law with limits
-                if (distance > 0.01) {  // Prevent division by very small numbers
-                    const forceMagnitude = Math.min(1.0 / (distance * distance), 2.0);
-                    direction.normalize().multiplyScalar(forceMagnitude);
-                    
-                    // Add velocity influence from other system
-                    const velInfluence = otherVel.clone().multiplyScalar(0.1);
-                    direction.add(velInfluence);
-                    
-                    netForce.add(direction);
-                    pairsFound++;
-                }
-            } catch (e) {
-                console.warn("Error parsing entanglement data:", e);
-            }
-        }
+    return noiseValue;
+}
+
+// Initialize center before creating particles
+initializeCenter();
+
+// Create the black hole
+const blackHoleObjects = createBlackHole();
+
+// Create particle system
+const particles = [];
+const particleGeometry = new THREE.BufferGeometry();
+const particlePositions = new Float32Array(PARTICLE_COUNT * 3);
+const particleVelocities = new Float32Array(PARTICLE_COUNT * 3);
+const particleSizes = new Float32Array(PARTICLE_COUNT);
+const particleColors = new Float32Array(PARTICLE_COUNT * 3);
+
+// Initialize particles with positions, sizes, and velocities
+// Using spherical distribution with radius 2.0 as described
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const i3 = i * 3;
+    
+    // Random spherical coordinates as mentioned in the description
+    const radius = BASE_RADIUS * (0.5 + Math.random() * 0.5); // Random radius from 1.0 to 2.0 for better initial orbits
+    const theta = Math.acos(2 * Math.random() - 1); // Random theta angle
+    const phi = 2 * Math.PI * Math.random();      // Random phi angle
+    
+    // Convert to Cartesian coordinates (centered around centerPosition)
+    particlePositions[i3] = centerPosition.x + radius * Math.sin(theta) * Math.cos(phi);
+    particlePositions[i3 + 1] = centerPosition.y + radius * Math.sin(theta) * Math.sin(phi);
+    particlePositions[i3 + 2] = centerPosition.z + radius * Math.cos(theta);
+    
+    // Calculate initial velocity for stable orbit around black hole
+    // Get direction vector from black hole to particle (radial direction)
+    const dirX = particlePositions[i3] - centerPosition.x;
+    const dirY = particlePositions[i3 + 1] - centerPosition.y;
+    const dirZ = particlePositions[i3 + 2] - centerPosition.z;
+    
+    // Calculate tangential direction (perpendicular to radial)
+    // For orbital motion, we need a velocity perpendicular to the radius vector
+    // Create a random rotation axis perpendicular to the radial direction
+    const rotationAxis = new THREE.Vector3();
+    rotationAxis.set(
+        Math.random() * 2 - 1,
+        Math.random() * 2 - 1,
+        Math.random() * 2 - 1
+    );
+    rotationAxis.normalize();
+    
+    // Make the rotation axis perpendicular to the radial direction
+    const radialDir = new THREE.Vector3(dirX, dirY, dirZ).normalize();
+    const perpVector = new THREE.Vector3().crossVectors(radialDir, rotationAxis).normalize();
+    
+    // Calculate orbital velocity magnitude based on distance (GM/r)^0.5
+    const distance = Math.sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ);
+    const orbitalSpeed = Math.sqrt(GRAVITATIONAL_CONSTANT * BLACK_HOLE_MASS / distance) * ORBITAL_VELOCITY_FACTOR;
+    
+    // Apply orbital velocity in perpendicular direction
+    particleVelocities[i3] = perpVector.x * orbitalSpeed;
+    particleVelocities[i3 + 1] = perpVector.y * orbitalSpeed;
+    particleVelocities[i3 + 2] = perpVector.z * orbitalSpeed;
+    
+    // Store particle data including noise offset for natural movement
+    particles.push({
+        noiseOffsetX: Math.random() * 100,
+        noiseOffsetY: Math.random() * 100,
+        noiseOffsetZ: Math.random() * 100,
+        size: 0.1, // Fixed size of 0.1 units as mentioned
+        noiseScale: 0.1 + Math.random() * 0.2, // Slightly varied noise influence
+        rotationAxis: perpVector, // Store rotation axis for consistent orbits
+        consumed: false // Flag to track if particle has been consumed by black hole
     });
     
-    // Apply the net force to the velocity shader
-    if (pairsFound > 0) {
-        netForce.divideScalar(pairsFound);
-        // Scale down force to prevent chaotic behavior
-        netForce.multiplyScalar(0.5);
-    }
+    // Set fixed particle size (as described: "typically set to 0.1 units")
+    particleSizes[i] = 0.1;
     
-    // Update the uniform in the velocity shader
-    if (velocityVariable && velocityVariable.material.uniforms.entanglementForce) {
-        velocityVariable.material.uniforms.entanglementForce.value.copy(netForce);
-    }
+    // Initialize with default color
+    const color = new THREE.Color();
+    color.setHSL(DEFAULT_HUE / 255, 1.0, 0.5); // Default blue-green as described
+    
+    particleColors[i3] = color.r;
+    particleColors[i3 + 1] = color.g;
+    particleColors[i3 + 2] = color.b;
 }
 
-// -------------------- MOUSE INTERACTION --------------------
-const mouse = new THREE.Vector3(0, 0, 0);
-let mouseActive = false;
+// Assign attributes to geometry
+particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+particleGeometry.setAttribute('size', new THREE.BufferAttribute(particleSizes, 1));
+particleGeometry.setAttribute('color', new THREE.BufferAttribute(particleColors, 3));
 
-function onMouseMove(event) {
-    // Normalize mouse position
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-    mouse.z = 0;
-    
-    // Project mouse to 3D space
-    const vector = new THREE.Vector3(mouse.x, mouse.y, 0.5);
-    vector.unproject(camera);
-    
-    const dir = vector.sub(camera.position).normalize();
-    const distance = -camera.position.z / dir.z;
-    const pos = camera.position.clone().add(dir.multiplyScalar(distance));
-    
-    // Set mouse position in shader
-    velocityVariable.material.uniforms.mousePos.value.copy(pos);
-    mouseActive = true;
-}
-
-function onMouseLeave() {
-    mouseActive = false;
-}
-
-// -------------------- ANIMATION & RENDERING --------------------
-let lastTime = 0;
-let frameCount = 0;
-// Buffer for position data
-const positionData = new Float32Array(GRID_SIZE * GRID_SIZE * 4);
-
-function animateFallbackSystem(time) {
-    // Animate the fallback particle system without GPU
-    if (particleSystem) {
-        const positions = particleSystem.geometry.attributes.position.array;
-        const particleCount = positions.length / 3;
+// Create particle material with proper blending
+const particleMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+        particleTexture: { value: particleTexture },
+        time: { value: 0 }
+    },
+    vertexShader: `
+        attribute float size;
+        varying vec3 vColor;
+        varying float vDistance;
+        uniform float time;
         
-        // Update positions with simple animation
-        for (let i = 0; i < particleCount; i++) {
-            const idx = i * 3;
-            const x = positions[idx];
-            const y = positions[idx + 1];
-            const z = positions[idx + 2];
+        void main() {
+            vColor = color;
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
             
-            // Apply simple rotation
-            const angle = time * 0.2;
-            const newX = x * Math.cos(angle) - y * Math.sin(angle);
-            const newY = x * Math.sin(angle) + y * Math.cos(angle);
+            // Simple distance-based sizing
+            vDistance = length(mvPosition.xyz);
+            float distanceFactor = 350.0 / vDistance;
             
-            positions[idx] = newX;
-            positions[idx + 1] = newY;
-            positions[idx + 2] = z + Math.sin(time + i * 0.01) * 0.002;
+            gl_PointSize = size * distanceFactor;
+            gl_Position = projectionMatrix * mvPosition;
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D particleTexture;
+        varying vec3 vColor;
+        varying float vDistance;
+        
+        void main() {
+            vec4 texColor = texture2D(particleTexture, gl_PointCoord);
+            gl_FragColor = vec4(vColor, 1.0) * texColor;
+            
+            if (gl_FragColor.a < 0.05) discard;
+        }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    vertexColors: true
+});
+
+// Create the point cloud
+const pointCloud = new THREE.Points(particleGeometry, particleMaterial);
+scene.add(pointCloud);
+
+// Window ID and pairing for entanglement
+const windowId = Math.random().toString(36).substr(2, 9);
+const urlParams = new URLSearchParams(window.location.search);
+const pairId = urlParams.get('pairId');
+
+// Animation and physics variables
+let time = 0;
+let lastSyncTime = 0;
+const SYNC_INTERVAL = 100; // ms
+let targetPosition = new THREE.Vector3(); // For circular movement
+let entanglementValue = new THREE.Vector3(); // Average position from paired window
+let stabilizationTicks = INITIAL_STABILIZATION_TICKS; // For initial stabilization
+
+// Animation loop
+function animate() {
+    requestAnimationFrame(animate);
+    time += 0.016; // ~60 FPS
+    
+    // Update material time
+    particleMaterial.uniforms.time.value = time;
+    
+    // Update black hole accretion disk
+    if (blackHoleObjects.accretionDisk) {
+        blackHoleObjects.accretionDisk.material.uniforms.time.value = time;
+        blackHoleObjects.accretionDisk.rotation.z += 0.002; // Rotate the accretion disk
+    }
+    
+    // Update target position (used for entanglement)
+    targetPosition.copy(centerPosition);
+    
+    // Update particle positions based on physics
+    const positions = pointCloud.geometry.attributes.position.array;
+    let consumedCount = 0; // Track how many particles have been consumed
+    
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const i3 = i * 3;
+        const particle = particles[i];
+        
+        // Skip consumed particles
+        if (particle.consumed) {
+            consumedCount++;
+            continue;
         }
         
-        particleSystem.geometry.attributes.position.needsUpdate = true;
-        particleSystem.rotation.z = Math.sin(time * 0.5) * 0.1;
-    }
-}
-
-function render(time) {
-    time *= 0.001; // Convert to seconds
-    const deltaTime = time - lastTime;
-    lastTime = time;
-    frameCount++;
-    
-    try {
-        if (gpuCompute) {
-            // GPU-based rendering
-            try {
-                // Update entanglement forces
-                updateEntanglement();
-                
-                // Update shader time
-                if (velocityVariable && velocityVariable.material && 
-                    velocityVariable.material.uniforms && 
-                    velocityVariable.material.uniforms.time) {
-                    velocityVariable.material.uniforms.time.value = time;
-                    velocityVariable.material.uniforms.frame = { value: frameCount };
-                }
-                
-                // Update mouse state - set far away when inactive
-                if (!mouseActive && velocityVariable.material && velocityVariable.material.uniforms.mousePos) {
-                    velocityVariable.material.uniforms.mousePos.value.set(1000, 1000, 1000);
-                }
-                
-                // Compute
-                gpuCompute.compute();
-                
-                // Update particles
-                if (particleSystem) {
-                    const positions = particleSystem.geometry.attributes.position.array;
-                    
-                    try {
-                        // Get position data from GPU
-                        const posTarget = gpuCompute.getCurrentRenderTarget(positionVariable);
-                        if (posTarget) {
-                            const localPositionData = new Float32Array(SAFE_GRID_SIZE * SAFE_GRID_SIZE * 4);
-                            
-                            renderer.readRenderTargetPixels(
-                                posTarget, 0, 0, SAFE_GRID_SIZE, SAFE_GRID_SIZE, localPositionData
-                            );
-                            
-                            // Update particle positions
-                            const limit = Math.min(positions.length / 3, SAFE_GRID_SIZE * SAFE_GRID_SIZE);
-                            for (let i = 0; i < limit; i++) {
-                                positions[i * 3] = localPositionData[i * 4];
-                                positions[i * 3 + 1] = localPositionData[i * 4 + 1];
-                                positions[i * 3 + 2] = localPositionData[i * 4 + 2];
-                            }
-                            
-                            particleSystem.geometry.attributes.position.needsUpdate = true;
-                        }
-                    } catch (readError) {
-                        console.warn("Error reading GPU texture:", readError);
-                    }
-                }
-            } catch (computeError) {
-                console.error("Error in GPU computation:", computeError);
+        // Update noise offsets for natural movement (slower updates)
+        particle.noiseOffsetX += 0.002;
+        particle.noiseOffsetY += 0.002;
+        particle.noiseOffsetZ += 0.002;
+        
+        // Calculate current position
+        const posX = positions[i3];
+        const posY = positions[i3 + 1];
+        const posZ = positions[i3 + 2];
+        
+        // Vector from particle to black hole
+        const dirX = centerPosition.x - posX;
+        const dirY = centerPosition.y - posY;
+        const dirZ = centerPosition.z - posZ;
+        
+        // Distance from particle to black hole
+        const distFromCenter = Math.sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ);
+        
+        // Check if particle is within event horizon (consumed by black hole)
+        if (distFromCenter <= EVENT_HORIZON_RADIUS) {
+            // Mark particle as consumed
+            particle.consumed = true;
+            
+            // Move particle to a position inside black hole (will be respawned later)
+            positions[i3] = centerPosition.x;
+            positions[i3 + 1] = centerPosition.y;
+            positions[i3 + 2] = centerPosition.z;
+            
+            particleVelocities[i3] = 0;
+            particleVelocities[i3 + 1] = 0;
+            particleVelocities[i3 + 2] = 0;
+            
+            continue;
+        }
+        
+        // Calculate gravity (inverse square law)
+        const gravityStrength = GRAVITATIONAL_CONSTANT * BLACK_HOLE_MASS / (distFromCenter * distFromCenter);
+        
+        // Normalize direction vector
+        const invDist = 1.0 / distFromCenter;
+        const normalizedDirX = dirX * invDist;
+        const normalizedDirY = dirY * invDist;
+        const normalizedDirZ = dirZ * invDist;
+        
+        // Apply gravity force
+        const gravityForceX = normalizedDirX * gravityStrength;
+        const gravityForceY = normalizedDirY * gravityStrength;
+        const gravityForceZ = normalizedDirZ * gravityStrength;
+        
+        // Calculate subtle noise influence for natural movement
+        const noiseX = simplex3D(
+            particle.noiseOffsetX, 
+            particle.noiseOffsetY + 31.416, 
+            particle.noiseOffsetZ + 42.123
+        ) * NOISE_SCALE * particle.noiseScale;
+        
+        const noiseY = simplex3D(
+            particle.noiseOffsetX + 43.3, 
+            particle.noiseOffsetY + 17.1, 
+            particle.noiseOffsetZ + 23.5
+        ) * NOISE_SCALE * particle.noiseScale;
+        
+        const noiseZ = simplex3D(
+            particle.noiseOffsetX + 83.3, 
+            particle.noiseOffsetY + 47.7, 
+            particle.noiseOffsetZ + 63.2
+        ) * NOISE_SCALE * particle.noiseScale;
+        
+        // Add entanglement influence if paired
+        let entanglementInfluenceX = 0;
+        let entanglementInfluenceY = 0;
+        let entanglementInfluenceZ = 0;
+        
+        if (entanglementValue.lengthSq() > 0) {
+            const entanglementDistance = Math.sqrt(
+                Math.pow(entanglementValue.x - posX, 2) +
+                Math.pow(entanglementValue.y - posY, 2) +
+                Math.pow(entanglementValue.z - posZ, 2)
+            );
+            
+            if (entanglementDistance > 0) {
+                // Normalize and apply entanglement force
+                entanglementInfluenceX = (entanglementValue.x - posX) / entanglementDistance * ENTANGLEMENT_FORCE;
+                entanglementInfluenceY = (entanglementValue.y - posY) / entanglementDistance * ENTANGLEMENT_FORCE;
+                entanglementInfluenceZ = (entanglementValue.z - posZ) / entanglementDistance * ENTANGLEMENT_FORCE;
             }
-        } else {
-            // CPU-based fallback animation
-            animateFallbackSystem(time);
         }
-    } catch (e) {
-        console.error("Error in render loop:", e);
+        
+        // Update velocities based on all influences
+        particleVelocities[i3] = particleVelocities[i3] * DAMPENING_FACTOR + 
+                                gravityForceX + noiseX + entanglementInfluenceX;
+        particleVelocities[i3 + 1] = particleVelocities[i3 + 1] * DAMPENING_FACTOR + 
+                                    gravityForceY + noiseY + entanglementInfluenceY;
+        particleVelocities[i3 + 2] = particleVelocities[i3 + 2] * DAMPENING_FACTOR + 
+                                    gravityForceZ + noiseZ + entanglementInfluenceZ;
+        
+        // Hard velocity limit to prevent runaway acceleration
+        const maxVelocity = 0.15; // Higher max velocity for orbital motion
+        const velocityMagnitude = Math.sqrt(
+            particleVelocities[i3] * particleVelocities[i3] + 
+            particleVelocities[i3 + 1] * particleVelocities[i3 + 1] + 
+            particleVelocities[i3 + 2] * particleVelocities[i3 + 2]
+        );
+        
+        if (velocityMagnitude > maxVelocity) {
+            const scaleFactor = maxVelocity / velocityMagnitude;
+            particleVelocities[i3] *= scaleFactor;
+            particleVelocities[i3 + 1] *= scaleFactor;
+            particleVelocities[i3 + 2] *= scaleFactor;
+        }
+        
+        // Update positions based on velocities
+        positions[i3] += particleVelocities[i3];
+        positions[i3 + 1] += particleVelocities[i3 + 1];
+        positions[i3 + 2] += particleVelocities[i3 + 2];
     }
     
-    // Always render the scene
+    // Respawn some consumed particles (emission from black hole jets)
+    if (consumedCount > 0) {
+        const respawnCount = Math.min(5, consumedCount); // Respawn up to 5 particles per frame
+        
+        let respawned = 0;
+        for (let i = 0; i < PARTICLE_COUNT && respawned < respawnCount; i++) {
+            if (particles[i].consumed) {
+                const i3 = i * 3;
+                
+                // Generate random position on a sphere at a safe distance
+                const respawnRadius = BASE_RADIUS * 1.5;
+                const theta = Math.acos(2 * Math.random() - 1);
+                const phi = 2 * Math.PI * Math.random();
+                
+                // Position particle
+                positions[i3] = centerPosition.x + respawnRadius * Math.sin(theta) * Math.cos(phi);
+                positions[i3 + 1] = centerPosition.y + respawnRadius * Math.sin(theta) * Math.sin(phi);
+                positions[i3 + 2] = centerPosition.z + respawnRadius * Math.cos(theta);
+                
+                // Calculate orbital velocity for new position
+                const dirX = positions[i3] - centerPosition.x;
+                const dirY = positions[i3 + 1] - centerPosition.y;
+                const dirZ = positions[i3 + 2] - centerPosition.z;
+                
+                // Create a new rotation axis for orbital motion
+                const rotationAxis = new THREE.Vector3();
+                rotationAxis.set(
+                    Math.random() * 2 - 1,
+                    Math.random() * 2 - 1,
+                    Math.random() * 2 - 1
+                );
+                rotationAxis.normalize();
+                
+                // Make the rotation axis perpendicular to the radial direction
+                const radialDir = new THREE.Vector3(dirX, dirY, dirZ).normalize();
+                const perpVector = new THREE.Vector3().crossVectors(radialDir, rotationAxis).normalize();
+                
+                // Calculate orbital velocity magnitude
+                const distance = respawnRadius;
+                const orbitalSpeed = Math.sqrt(GRAVITATIONAL_CONSTANT * BLACK_HOLE_MASS / distance) * ORBITAL_VELOCITY_FACTOR;
+                
+                // Apply orbital velocity
+                particleVelocities[i3] = perpVector.x * orbitalSpeed;
+                particleVelocities[i3 + 1] = perpVector.y * orbitalSpeed;
+                particleVelocities[i3 + 2] = perpVector.z * orbitalSpeed;
+                
+                // Reset particle properties
+                particles[i].consumed = false;
+                particles[i].rotationAxis.copy(perpVector);
+                particles[i].noiseOffsetX = Math.random() * 100;
+                particles[i].noiseOffsetY = Math.random() * 100;
+                particles[i].noiseOffsetZ = Math.random() * 100;
+                
+                respawned++;
+            }
+        }
+    }
+    
+    // Update geometry
+    pointCloud.geometry.attributes.position.needsUpdate = true;
+    
+    // Synchronization - throttled to reduce localStorage operations
+    const now = performance.now();
+    if (now - lastSyncTime > SYNC_INTERVAL) {
+        // Calculate average position (center of mass) using sampling
+        // 16x16 sample as mentioned in description
+        let sumX = 0, sumY = 0, sumZ = 0;
+        for (let i = 0; i < SAMPLE_COUNT; i++) {
+            const idx = Math.floor(Math.random() * PARTICLE_COUNT);
+            sumX += positions[idx * 3];
+            sumY += positions[idx * 3 + 1];
+            sumZ += positions[idx * 3 + 2];
+        }
+        
+        // Calculate average
+        const avgX = sumX / SAMPLE_COUNT;
+        const avgY = sumY / SAMPLE_COUNT;
+        const avgZ = sumZ / SAMPLE_COUNT;
+        
+        // Store entanglement value in localStorage as described
+        const currentEntanglement = {
+            x: avgX,
+            y: avgY,
+            z: avgZ,
+            t: time
+        };
+        
+        localStorage.setItem(`entanglement_${windowId}`, JSON.stringify(currentEntanglement));
+        
+        // If paired, get the paired window's entanglement value
+        if (pairId) {
+            const pairedData = localStorage.getItem(`entanglement_${pairId}`);
+            if (pairedData) {
+                try {
+                    const pairedValue = JSON.parse(pairedData);
+                    entanglementValue.set(pairedValue.x, pairedValue.y, pairedValue.z);
+                } catch (e) {
+                    console.error('Error parsing paired data:', e);
+                }
+            }
+        }
+        
+        lastSyncTime = now;
+    }
+    
     renderer.render(scene, camera);
-    requestAnimationFrame(render);
 }
 
-// -------------------- EVENT HANDLERS --------------------
-// Window resize
-function onWindowResize() {
+// Update particle colors based on HSL value (as described)
+function updateColor(hue) {
+    const h = hue / 255; // Normalize to 0-1 range
+    
+    // Update particle colors
+    const colors = pointCloud.geometry.attributes.color.array;
+    
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const i3 = i * 3;
+        
+        // Create color with HSL (saturation=1, lightness=0.5) as per description
+        const color = new THREE.Color();
+        color.setHSL(h, 1.0, 0.5);
+        
+        colors[i3] = color.r;
+        colors[i3 + 1] = color.g;
+        colors[i3 + 2] = color.b;
+    }
+    
+    pointCloud.geometry.attributes.color.needsUpdate = true;
+}
+
+// Create new window for entanglement
+function openNewWindow() {
+    const newUrl = `${window.location.origin}${window.location.pathname}?pairId=${encodeURIComponent(windowId)}`;
+    window.open(newUrl, '_blank', 'width=800,height=600');
+}
+
+// Resize handling
+window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-// Color slider
-document.getElementById('hueSlider').addEventListener('input', (e) => {
-    if (!particleSystem || !particleSystem.material) return;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     
-    const hue = parseFloat(e.target.value);
+    // Recalculate screen center on resize
+    calculateScreenCenter();
     
-    // For ShaderMaterial particle system
-    if (particleSystem.material.type === 'ShaderMaterial') {
-        // Convert HSL to RGB and set as uniform
-        const color = new THREE.Color().setHSL(hue, 0.8, 0.6);
-        particleSystem.material.uniforms.particleColor.value = color;
-    } 
-    // For fallback PointsMaterial system with vertex colors
-    else if (particleSystem.geometry.attributes.color) {
-        const colors = particleSystem.geometry.attributes.color.array;
-        
-        for (let i = 0; i < colors.length / 3; i++) {
-            const saturation = 0.7 + Math.random() * 0.3;
-            const lightness = 0.5 + Math.random() * 0.2;
-            const color = new THREE.Color().setHSL(hue, saturation, lightness);
-            
-            colors[i * 3] = color.r;
-            colors[i * 3 + 1] = color.g;
-            colors[i * 3 + 2] = color.b;
-        }
-        
-        particleSystem.geometry.attributes.color.needsUpdate = true;
+    // Update center position to stay in view
+    centerPosition.z = screenCenterPosition.z;
+    saveCenter();
+    
+    // Update black hole position
+    if (blackHoleObjects.blackHole) {
+        blackHoleObjects.blackHole.position.copy(centerPosition);
+    }
+    if (blackHoleObjects.distortionRing) {
+        blackHoleObjects.distortionRing.position.copy(centerPosition);
+    }
+    if (blackHoleObjects.accretionDisk) {
+        blackHoleObjects.accretionDisk.position.copy(centerPosition);
     }
 });
 
-// Spawn new window
-document.getElementById('spawnWindow').addEventListener('click', () => {
-    const newId = Math.random().toString(36).slice(2);
-    pairedWindows.push(WINDOW_ID);
-    localStorage.setItem('entangledPairs', JSON.stringify(pairedWindows));
-    window.open(window.location.href + `?pairId=${WINDOW_ID}`, '_blank');
+// Connect the event handlers
+document.getElementById('colorSlider').addEventListener('input', function() {
+    updateColor(this.value);
 });
 
-// -------------------- INITIALIZATION --------------------
-function init() {
-    try {
-        console.log("Starting initialization...");
-        
-        // Try GPU computation first
-        let gpuInitialized = false;
-        try {
-            gpuInitialized = initGPUComputation();
-            
-            // Initialize missing uniforms
-            if (gpuInitialized && positionVariable && velocityVariable) {
-                // Add missing uniforms for position variable
-                positionVariable.material.uniforms.pairedForce = { value: new THREE.Vector3(0, 0, 0) };
-                
-                // Add missing uniforms for velocity variable
-                velocityVariable.material.uniforms.mousePos = { value: new THREE.Vector3(1000, 1000, 1000) };
-                velocityVariable.material.uniforms.frame = { value: 0 };
-                
-                // Use more appropriate shaders instead of minimal ones
-                positionVariable.material.fragmentShader = positionShader();
-                velocityVariable.material.fragmentShader = velocityShader();
-                
-                console.log("Initialized shader uniforms and updated shader code");
-            }
-        } catch (e) {
-            console.error("GPU computation failed:", e);
-            gpuInitialized = false;
-        }
-        
-        console.log("GPU Computation initialized:", gpuInitialized);
-        
-        // Regardless of GPU init result, create a particle system
-        let particlesCreated;
-        if (gpuInitialized) {
-            particlesCreated = createParticleSystem();
-        } else {
-            particlesCreated = createFallbackSystem();
-        }
-        
-        console.log("Particles created:", particlesCreated);
-        
-        if (particlesCreated) {
-            // Add event listeners
-            window.addEventListener('resize', onWindowResize);
-            window.addEventListener('mousemove', onMouseMove);
-            window.addEventListener('mouseleave', onMouseLeave);
-            
-            // Start render loop
-            console.log("Starting render loop...");
-            requestAnimationFrame(render);
-        }
-    } catch (e) {
-        console.error("Error during initialization:", e);
-        document.getElementById('canvas-container').innerHTML = 
-            '<div style="color:red; padding:20px;">Initialization error: ' + e.message + '</div>';
-    }
-}
+document.getElementById('newWindowBtn').addEventListener('click', openNewWindow);
 
-// Start the application with a delay to ensure DOM is fully loaded
-window.addEventListener('DOMContentLoaded', () => {
-    console.log("DOM content loaded, initializing application after short delay...");
-    // Short delay to ensure browser is ready
-    setTimeout(init, 100);
-});
+// Initialize with default color
+updateColor(DEFAULT_HUE);
+
+// Start animation loop
+animate();
+
+console.log("Black hole visualization loaded - particles orbiting at the center"); 

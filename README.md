@@ -1,83 +1,116 @@
-# Entangled Project
+# Entangled Project - Quantum Electron Visualization
 
-An interactive art piece with synchronized 3D particle systems across multiple browser windows, based on Bjorn Staal's *Entangled*, with additional inspiration from [bgstaal/gpuparticles](https://github.com/bgstaal/gpuparticles).
+An interactive visualization of quantum entanglement between electrons across multiple browser windows, inspired by Bjorn Staal's *Entangled* concept, with implementation ideas from [bgstaal/gpuparticles](https://github.com/bgstaal/gpuparticles) and [bgstaal/multiplewindow3dscene](https://github.com/bgstaal/multiplewindow3dscene).
 
 ## Features
 
-- Real-time GPU-accelerated particle simulation using `three.js` and `GPUComputationRenderer`
-- Advanced curl noise algorithms for organic, fluid-like particle movement
-- Cross-window synchronization via `localStorage` with an "entanglement value" derived from particle positions
-- Dynamic window spawning with bidirectional influence between paired systems
-- Customizable particle color via HSL slider
-- Responsive design with GPU texture resizing
-- Velocity-based particle coloring for enhanced visual impact
+- Realistic quantum electron visualization with core and electron cloud
+- GPU-accelerated particle simulation using `three.js` and `GPUComputationRenderer`
+- Quantum mechanical effects including orbital motion and quantum fluctuations
+- Cross-window quantum entanglement via `localStorage`
+- Electron wave functions and probability-based particle distribution
+- Dynamic creation of entangled electron pairs across multiple windows
+- Customizable electron color via HSL slider
+- Physics-based visualization with orbital mechanics and quantum field effects
 
 ## Prerequisites
 
 - **Browser**: Chrome 95+ or Firefox 90+ (WebGL 2.0 required)
-- **Python**: Python 3.10+ with Flask
+- **Python**: Python 3.8+ with Flask and Flask-CORS
 
 ## Setup Instructions
 
 1. **Install Dependencies**:
 
    ```bash
-   pip install flask flask-cors
+   pip install -r requirements.txt
    ```
 
 2. **Download Libraries**:
-   - Download `three.min.js` (v0.148.0) from [CDN link](https://cdn.jsdelivr.net/npm/three@0.148.0/build/three.min.js) and place it in `static/js/`
-   - Download `GPUComputationRenderer.js` from [Direct source](https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/jsm/misc/GPUComputationRenderer.js) and place it in `static/js/`
+   The required JavaScript libraries can be downloaded automatically by running:
 
-3. **Directory Structure**:
-
-   ```plaintext
-   entangled_project/
-   ├── static/
-   │   ├── css/
-   │   │   └── style.css
-   │   └── js/
-   │       ├── three.min.js         # v0.148.0
-   │       ├── GPUComputationRenderer.js
-   │       └── main.js
-   ├── templates/
-   │   └── index.html
-   ├── app.py
-   └── README.md
+   ```bash
+   python download_libs.py
    ```
 
-4. **Run Server**:
+   This will download:
+   - `three.min.js` (v0.148.0) from jsdelivr CDN
+   - `GPUComputationRenderer.js` from Three.js GitHub repository
+
+3. **Run Server**:
 
    ```bash
    python app.py
    ```
 
-5. **Access**: Open `http://localhost:5000` in your browser.
+4. **Access**: Open `http://localhost:5000` in your browser.
 
 ## Usage
 
-- Move your mouse to interact with the particles
-- Use the Hue slider to change the color of the particles
-- Click "Spawn Entangled Window" to create a new window that synchronizes with the current one
-- Watch as particle systems in different windows influence each other through entanglement forces
+- Observe the electron visualization with its core and surrounding electron cloud
+- Use the Hue slider to change the electron's color
+- Click "Create New Window" to spawn a new entangled electron in a separate window
+- Watch how the electrons' behaviors influence each other via quantum entanglement
+
+## Visualization Details
+
+### Electron Structure
+
+- **Core**: Denser, brighter central area representing the nucleus area
+- **Electron Cloud**: Surrounding probabilistic cloud of particles representing electron's quantum nature
+- **Orbital Motion**: Particles follow orbital paths with quantum fluctuations
+- **Wave Function**: Oscillating fields affect particle behavior to simulate quantum effects
+
+### Quantum Entanglement
+
+- When two electrons are created as an entangled pair, their states become linked
+- Changes in one electron's quantum state affect the corresponding entangled electron
+- The entanglement is visually represented through synchronized orbital behaviors
+- Each pair of windows maintains its own entanglement relationship
+
+## Project Structure
+
+```plaintext
+entangled_project/
+├── app.py                  # Flask server
+├── download_libs.py        # Helper script to download JS libraries
+├── requirements.txt        # Python dependencies
+├── static/                 # Static assets
+│   ├── css/                # CSS files
+│   │   └── style.css       # Styles for UI and layout
+│   └── js/                 # JavaScript files
+│       ├── three.min.js    # Three.js library
+│       ├── GPUComputationRenderer.js  # GPU computation library
+│       └── main.js         # Electron visualization and entanglement logic
+├── templates/              # HTML templates
+│   └── index.html          # Main HTML page
+└── README.md               # Project documentation
+```
+
+## Technical Implementation
+
+### Electron Simulation
+
+- Core particles: Denser distribution near center with brighter appearance
+- Cloud particles: Distributed based on quantum probability functions
+- Orbital mechanics: Particles follow physics-based orbital paths with quantum uncertainty
+- Wave function: Oscillating fields create electron wave patterns
+
+### Physics-based Entanglement
+
+- Entangled electrons share state information via localStorage
+- Changes in one electron's quantum state influence the paired electron
+- Entanglement is implemented using stateful synchronization with appropriate quantum behaviors
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| Black screen | Confirm `three.min.js` and `GPUComputationRenderer.js` are in `static/js/` |
-| No synchronization | Enable CORS in Flask and disable browser security flags (e.g., `chrome://flags/#block-insecure-private-network-requests`) |
-| Low FPS | Reduce `PARTICLE_COUNT` to 16384 (128x128 grid) in `main.js` |
-| GPU compatibility issues | The system will automatically fall back to CPU mode with fewer particles |
-
-## Performance Optimization
-
-- Particle sampling for `localStorage` sync is limited to small texture regions
-- Particle count is optimized for balance between visual density and performance
-- Damping factors prevent exponential growth of forces between windows
-- Velocity limits prevent unstable particle behavior
-- Curl noise provides organic movement patterns while maintaining computational efficiency
+| Black screen | Check browser console for WebGL errors; ensure WebGL 2.0 is supported |
+| No entanglement | Check for localStorage permission errors in browser console |
+| Low FPS | Reduce `PARTICLE_COUNT` in `main.js` (line 2) |
+| Electron disappears | Adjust `ELECTRON_CLOUD_SIZE` constant if particles are escaping the simulation bounds |
 
 ## Credits
 
-Based on the concept by Bjorn Staal. Implementation follows the specification from the Entangled Project, with additional techniques inspired by [bgstaal/gpuparticles](https://github.com/bgstaal/gpuparticles) (MIT License).
+Based on the concept by Bjorn Staal. Quantum visualization inspired by modern quantum mechanical principles and implemented using [bgstaal/gpuparticles](https://github.com/bgstaal/gpuparticles) and [bgstaal/multiplewindow3dscene](https://github.com/bgstaal/multiplewindow3dscene) techniques.

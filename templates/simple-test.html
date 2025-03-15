@@ -3,16 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Entangled Project</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>Three.js Test</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+        }
+        #container {
+            width: 100%;
+            height: 100vh;
+        }
+    </style>
 </head>
 <body>
     <div id="container"></div>
-    <div id="controls">
-        <label for="colorSlider">Particle Color (Hue):</label>
-        <input type="range" id="colorSlider" min="0" max="255" value="128">
-        <button id="newWindowBtn">Create New Window</button>
-    </div>
     
     <!-- Import Three.js from CDN -->
     <script type="importmap">
@@ -24,7 +29,7 @@
     }
     </script>
     
-    <!-- Main script -->
-    <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <!-- Test script -->
+    <script type="module" src="{{ url_for('static', filename='js/simple-test.js') }}"></script>
 </body>
 </html> 

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Electron Visualization</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        #container {
+            width: 100%;
+            height: 100vh;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    <div id="info">
+        <h2>Simple Electron Visualization</h2>
+        <p>This is a very basic electron model using Three.js</p>
+    </div>
+    
+    <!-- Import Three.js from CDN -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.150.1/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.150.1/examples/jsm/"
+        }
+    }
+    </script>
+    
+    <!-- Basic electron script -->
+    <script type="module">
+        import * as THREE from 'three';
+        
+        // Basic scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 5;
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('container').appendChild(renderer.domElement);
+        
+        // Create electron core (nucleus area)
+        const coreGeometry = new THREE.SphereGeometry(0.3, 32, 32);
+        const coreMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x4080ff,
+            transparent: true,
+            opacity: 0.7
+        });
+        const core = new THREE.Mesh(coreGeometry, coreMaterial);
+        scene.add(core);
+        
+        // Create electron cloud
+        const cloudParticles = [];
+        const particleCount = 1000;
+        const particleGeometry = new THREE.BufferGeometry();
+        const particlePositions = new Float32Array(particleCount * 3);
+        
+        // Create electron cloud particles with quantum probability distribution
+        for (let i = 0; i < particleCount; i++) {
+            const i3 = i * 3;
+            
+            // Quantum probability distribution (higher chance closer to core)
+            const radius = 0.3 + Math.pow(Math.random(), 0.5) * 1.7;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            
+            particlePositions[i3] = radius * Math.sin(phi) * Math.cos(theta);
+            particlePositions[i3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+            particlePositions[i3 + 2] = radius * Math.cos(phi);
+            
+            // Store initial position for animation
+            cloudParticles.push({
+                x: particlePositions[i3],
+                y: particlePositions[i3 + 1],
+                z: particlePositions[i3 + 2],
+                radius: radius,
+                theta: theta,
+                phi: phi,
+                speed: 0.005 / Math.sqrt(radius) // Faster when closer
+            });
+        }
+        
+        particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+        
+        const particleMaterial = new THREE.PointsMaterial({
+            color: 0x80b0ff,
+            size: 0.05,
+            transparent: true,
+            opacity: 0.6,
+            blending: THREE.AdditiveBlending,
+            sizeAttenuation: true
+        });
+        
+        const cloud = new THREE.Points(particleGeometry, particleMaterial);
+        scene.add(cloud);
+        
+        // Add ambient light
+        const ambientLight = new THREE.AmbientLight(0x333333);
+        scene.add(ambientLight);
+        
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Rotate the core slightly
+            core.rotation.y += 0.01;
+            
+            // Animate cloud particles in orbital motion
+            const positions = cloud.geometry.attributes.position.array;
+            
+            for (let i = 0; i < particleCount; i++) {
+                const i3 = i * 3;
+                const particle = cloudParticles[i];
+                
+                // Update particle position - orbital motion
+                particle.theta += particle.speed;
+                
+                // Calculate new position
+                positions[i3] = particle.radius * Math.sin(particle.phi) * Math.cos(particle.theta);
+                positions[i3 + 1] = particle.radius * Math.sin(particle.phi) * Math.sin(particle.theta);
+                positions[i3 + 2] = particle.radius * Math.cos(particle.phi);
+                
+                // Add quantum fluctuation (randomness)
+                positions[i3] += (Math.random() - 0.5) * 0.02;
+                positions[i3 + 1] += (Math.random() - 0.5) * 0.02;
+                positions[i3 + 2] += (Math.random() - 0.5) * 0.02;
+            }
+            
+            cloud.geometry.attributes.position.needsUpdate = true;
+            
+            // Rotate entire scene for a better view
+            scene.rotation.y = Math.sin(Date.now() * 0.0005) * 0.1;
+            
+            renderer.render(scene, camera);
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Start animation
+        animate();
+        
+        console.log("Electron visualization loaded");
+    </script>
+</body>
+</html> 
