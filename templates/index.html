@@ -3,28 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Entangled Project</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>Tangled Web</title>
+    <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-    <div id="container"></div>
-    <div id="controls">
-        <label for="colorSlider">Particle Color (Hue):</label>
-        <input type="range" id="colorSlider" min="0" max="255" value="128">
-        <button id="newWindowBtn">Create New Window</button>
-    </div>
-    
-    <!-- Import Three.js from CDN -->
+    <canvas id="webgl-canvas"></canvas>
+
+    <!-- Socket.IO Client Library (from CDN) -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+    <!-- Three.js (served locally) -->
     <script type="importmap">
-    {
-        "imports": {
-            "three": "https://unpkg.com/three@0.150.1/build/three.module.js",
-            "three/addons/": "https://unpkg.com/three@0.150.1/examples/jsm/"
+        {
+            "imports": {
+                "three": "/static/js/vendor/three.module.js",
+                "three/addons/": "/static/js/vendor/"
+            }
         }
-    }
     </script>
-    
-    <!-- Main script -->
-    <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+    <!-- Your main script -->
+    <script type="module" src="/static/js/main.js"></script>
 </body>
 </html> 

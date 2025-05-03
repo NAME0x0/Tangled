@@ -1,4 +1,4 @@
-flask==2.3.3
-flask-cors==4.0.0
-Werkzeug==2.3.7
-gunicorn>=20.1.0
+Flask
+Flask-SocketIO
+eventlet # Or gevent - needed for Flask-SocketIO production/async modes
+setuptools # Provides distutils for compatibility with older packages on Python 3.12+ 

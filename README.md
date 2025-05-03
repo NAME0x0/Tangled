@@ -1,116 +1,82 @@
-# Entangled Project - Quantum Electron Visualization
+# Tangled
 
-An interactive visualization of quantum entanglement between electrons across multiple browser windows, inspired by Bjorn Staal's *Entangled* concept, with implementation ideas from [bgstaal/gpuparticles](https://github.com/bgstaal/gpuparticles) and [bgstaal/multiplewindow3dscene](https://github.com/bgstaal/multiplewindow3dscene).
+A web application utilizing Three.js for 3D rendering and Socket.IO for real-time communication.
 
-## Features
+## Overview
 
-- Realistic quantum electron visualization with core and electron cloud
-- GPU-accelerated particle simulation using `three.js` and `GPUComputationRenderer`
-- Quantum mechanical effects including orbital motion and quantum fluctuations
-- Cross-window quantum entanglement via `localStorage`
-- Electron wave functions and probability-based particle distribution
-- Dynamic creation of entangled electron pairs across multiple windows
-- Customizable electron color via HSL slider
-- Physics-based visualization with orbital mechanics and quantum field effects
+Tangled Web is a web-based application featuring a 3D scene rendered using Three.js within an HTML canvas. It incorporates Socket.IO to enable real-time interactions or data synchronization between clients and the server, or potentially between different browser windows.
+
+Key technologies include:
+
+- **Frontend**: HTML, CSS, JavaScript
+- **3D Rendering**: Three.js
+- **Real-time Communication**: Socket.IO
+- **Backend (Assumed)**: Python/Flask for serving files and handling Socket.IO events.
 
 ## Prerequisites
 
-- **Browser**: Chrome 95+ or Firefox 90+ (WebGL 2.0 required)
-- **Python**: Python 3.8+ with Flask and Flask-CORS
+- Modern web browser with WebGL support
+- Python 3.7+ (for the server, if using Flask)
+- Node.js and npm (if frontend build steps are involved, not explicitly shown but common)
 
-## Setup Instructions
+## Installation
 
-1. **Install Dependencies**:
+1.  Clone the repository:
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+    ```bash
+    git clone https://github.com/yourusername/tangled.git
+    cd tangled
+    ```
 
-2. **Download Libraries**:
-   The required JavaScript libraries can be downloaded automatically by running:
+2.  Install Python dependencies (if using Flask backend):
 
-   ```bash
-   python download_libs.py
-   ```
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-   This will download:
-   - `three.min.js` (v0.148.0) from jsdelivr CDN
-   - `GPUComputationRenderer.js` from Three.js GitHub repository
+3.  Install Node.js dependencies (if applicable):
 
-3. **Run Server**:
+    ```bash
+    # npm install
+    # npm run build
+    ```
 
-   ```bash
-   python app.py
-   ```
+4.  Start the server (example using Flask):
 
-4. **Access**: Open `http://localhost:5000` in your browser.
+    ```bash
+    python app.py
+    ```
+
+5.  Open in your browser:
+
+    ```
+    http://localhost:5000 # <-- Or the port your server runs on
+    ```
 
 ## Usage
 
-- Observe the electron visualization with its core and surrounding electron cloud
-- Use the Hue slider to change the electron's color
-- Click "Create New Window" to spawn a new entangled electron in a separate window
-- Watch how the electrons' behaviors influence each other via quantum entanglement
+-   Navigate to the application URL in your web browser after starting the server.
+-   Interact with the 3D scene rendered on the canvas.
+-   (Add specific interaction details here as the project develops, e.g., mouse controls, UI elements).
 
-## Visualization Details
+## Technical Details
 
-### Electron Structure
-
-- **Core**: Denser, brighter central area representing the nucleus area
-- **Electron Cloud**: Surrounding probabilistic cloud of particles representing electron's quantum nature
-- **Orbital Motion**: Particles follow orbital paths with quantum fluctuations
-- **Wave Function**: Oscillating fields affect particle behavior to simulate quantum effects
-
-### Quantum Entanglement
-
-- When two electrons are created as an entangled pair, their states become linked
-- Changes in one electron's quantum state affect the corresponding entangled electron
-- The entanglement is visually represented through synchronized orbital behaviors
-- Each pair of windows maintains its own entanglement relationship
-
-## Project Structure
-
-```plaintext
-entangled_project/
-├── app.py                  # Flask server
-├── download_libs.py        # Helper script to download JS libraries
-├── requirements.txt        # Python dependencies
-├── static/                 # Static assets
-│   ├── css/                # CSS files
-│   │   └── style.css       # Styles for UI and layout
-│   └── js/                 # JavaScript files
-│       ├── three.min.js    # Three.js library
-│       ├── GPUComputationRenderer.js  # GPU computation library
-│       └── main.js         # Electron visualization and entanglement logic
-├── templates/              # HTML templates
-│   └── index.html          # Main HTML page
-└── README.md               # Project documentation
-```
-
-## Technical Implementation
-
-### Electron Simulation
-
-- Core particles: Denser distribution near center with brighter appearance
-- Cloud particles: Distributed based on quantum probability functions
-- Orbital mechanics: Particles follow physics-based orbital paths with quantum uncertainty
-- Wave function: Oscillating fields create electron wave patterns
-
-### Physics-based Entanglement
-
-- Entangled electrons share state information via localStorage
-- Changes in one electron's quantum state influence the paired electron
-- Entanglement is implemented using stateful synchronization with appropriate quantum behaviors
+-   **Client-side**: Uses `index.html` as the entry point, loading CSS (`style.css`), Three.js library, and the main application logic (`main.js`).
+-   **Three.js**: Manages the WebGL rendering context, scene graph, camera, and rendering loop.
+-   **Socket.IO**: Establishes a WebSocket connection for real-time, bidirectional communication. Used for synchronizing state or events.
+-   **Server-side (Assumed)**: A backend (like Flask) serves the static files (`index.html`, CSS, JS) and manages Socket.IO connections and event handling.
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| Black screen | Check browser console for WebGL errors; ensure WebGL 2.0 is supported |
-| No entanglement | Check for localStorage permission errors in browser console |
-| Low FPS | Reduce `PARTICLE_COUNT` in `main.js` (line 2) |
-| Electron disappears | Adjust `ELECTRON_CLOUD_SIZE` constant if particles are escaping the simulation bounds |
+-   **3D Scene not rendering**: Ensure your browser supports WebGL and that there are no JavaScript errors in the console.
+-   **Real-time updates not working**: Check the browser's network tab and console for Socket.IO connection errors. Verify the server is running and accessible.
+-   **Performance Issues**: Optimize Three.js scene complexity or rendering settings. Check for bottlenecks in JavaScript execution or network communication.
 
-## Credits
+## License
 
-Based on the concept by Bjorn Staal. Quantum visualization inspired by modern quantum mechanical principles and implemented using [bgstaal/gpuparticles](https://github.com/bgstaal/gpuparticles) and [bgstaal/multiplewindow3dscene](https://github.com/bgstaal/multiplewindow3dscene) techniques.
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+-   Powered by THREE.js
+-   Utilizes Socket.IO for real-time features

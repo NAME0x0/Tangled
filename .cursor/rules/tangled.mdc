@@ -1,0 +1,16 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# Your rule content
+
+- Be Iterative: Don't expect a perfect result instantly. Ask the AI to generate parts sequentially (e.g., "Set up the multi-window structure first," then "Initialize the particle system," then "Implement the attractor force in the update shader").
+- Be Specific: When asking for changes or debugging, be precise. Instead of "It doesn't look right," say "The particles aren't swirling, they're just moving towards the attractor. Can we add curl noise to the update shader?" or "How can I change the particle color based on distance to the attractor in the draw shader?"
+- Provide Context: When asking for modifications or fixing errors, @-mention the relevant files (@src/ofApp.cpp, @bin/data/shaders/update.vert) and include the specific code block or error message you're discussing.
+- Refer to the Spec: Use @-mention to refer back to specific points in the spec file prompt if the AI deviates or needs clarification (e.g., "Referring to Feature Spec 2.c, ensure the particle color is green near the left attractor").
+- Focus on Shaders: Acknowledge that the GLSL shaders are critical for the visual style. Expect to ask for specific modifications to the shader logic frequently. The AI can generate a good starting point, but fine-tuning the math for forces and rendering will likely require detailed requests.
+- Debug Systematically: If something isn't working, ask the AI to help debug step-by-step. "Let's check if the attractor uniform is being passed correctly." "Can you add code to draw the attractor positions?" "Is the noise function being calculated correctly in the update shader?"
+- Manage Addon Differences: If the AI gets confused about bgstaal/gpuparticles vs. ofxGpuParticles or the multi-window addon, explicitly state which one you intend to use based on availability/functionality in your oF setup.
+- Patience: Complex generative visuals take time. Work with the AI, review its suggestions, and guide it towards the desired outcome based on the reference video and the spec.
