@@ -25,11 +25,18 @@ jobs:
       # - name: Build project
       #   run: npm run build # Ensure build output goes to a directory like 'dist'
 
+      - name: Prepare deployment files
+        run: |
+          mkdir _site
+          cp templates/index.html _site/index.html
+          cp -r static _site/static
+          touch _site/.nojekyll # Disable Jekyll processing
+
       - name: Deploy to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: . # Publish the root directory contents
+          publish_dir: ./_site # Publish the prepared directory
           # If you had a build step outputting to 'dist', you would use:
           # publish_dir: ./dist
           publish_branch: gh-pages # Deploy to the gh-pages branch
