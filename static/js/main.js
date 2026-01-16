@@ -788,30 +788,40 @@ function init() {
     // Handle window resize
     window.addEventListener('resize', onWindowResize, false);
 
-    // --- Socket.IO Setup ---
-    console.log("Attempting to connect to Socket.IO server...");
-    socket = io();
+    // --- Socket.IO Setup (Optional - for server synchronization) ---
+    if (typeof io !== 'undefined') {
+        console.log("Attempting to connect to Socket.IO server...");
+        try {
+            socket = io();
 
-    socket.on('connect', () => {
-        console.log('Connected to server with ID:', socket.id);
-    });
+            socket.on('connect', () => {
+                console.log('Connected to server with ID:', socket.id);
+            });
 
-    socket.on('disconnect', (reason) => {
-        console.log('Disconnected from server:', reason);
-    });
+            socket.on('disconnect', (reason) => {
+                console.log('Disconnected from server:', reason);
+            });
 
-    socket.on('connect_error', (error) => {
-        console.error('Connection Error:', error);
-    });
+            socket.on('connect_error', (error) => {
+                console.warn('Socket.IO connection error (server may not be available):', error.message);
+            });
 
-    socket.on('update_params', (params) => {
-        console.log('Received params update:', params);
-        // --- TODO: Update GPGPU shader uniforms based on received params --- 
-        if (params.particle_count) {
-             console.log("Need to update particle count to:", params.particle_count); // TODO: Re-init needed?
+            socket.on('update_params', (params) => {
+                console.log('Received params update:', params);
+                // --- TODO: Update GPGPU shader uniforms based on received params --- 
+                if (params.particle_count) {
+                     console.log("Need to update particle count to:", params.particle_count); // TODO: Re-init needed?
+                }
+                // --------------------------------------------------------
+            });
+        } catch (e) {
+            console.warn('Socket.IO initialization failed:', e.message);
+            socket = null;
         }
-        // --------------------------------------------------------
-    });
+    } else {
+        console.log("Socket.IO not available - running in standalone mode");
+        socket = null;
+    }
 
     // Start the animation loop
     animate();
