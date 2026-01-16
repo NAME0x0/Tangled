@@ -788,30 +788,48 @@ function init() {
     // Handle window resize
     window.addEventListener('resize', onWindowResize, false);
 
-    // --- Socket.IO Setup ---
-    console.log("Attempting to connect to Socket.IO server...");
-    socket = io();
+    // --- Socket.IO Setup (optional - only when backend is available) ---
+    const isStaticHosting = window.location.hostname.includes('github.io') ||
+                            window.location.hostname.includes('gitlab.io') ||
+                            window.location.hostname.includes('netlify.app') ||
+                            window.location.hostname.includes('vercel.app') ||
+                            window.location.protocol === 'file:';
 
-    socket.on('connect', () => {
-        console.log('Connected to server with ID:', socket.id);
-    });
+    if (isStaticHosting) {
+        console.log("Static hosting detected - Socket.IO disabled (running in standalone mode)");
+    } else if (typeof io !== 'undefined') {
+        console.log("Attempting to connect to Socket.IO server...");
+        socket = io({
+            reconnectionAttempts: 3,  // Limit retry attempts
+            timeout: 5000             // 5 second timeout
+        });
 
-    socket.on('disconnect', (reason) => {
-        console.log('Disconnected from server:', reason);
-    });
+        socket.on('connect', () => {
+            console.log('Connected to server with ID:', socket.id);
+        });
 
-    socket.on('connect_error', (error) => {
-        console.error('Connection Error:', error);
-    });
+        socket.on('disconnect', (reason) => {
+            console.log('Disconnected from server:', reason);
+        });
 
-    socket.on('update_params', (params) => {
-        console.log('Received params update:', params);
-        // --- TODO: Update GPGPU shader uniforms based on received params --- 
-        if (params.particle_count) {
-             console.log("Need to update particle count to:", params.particle_count); // TODO: Re-init needed?
-        }
-        // --------------------------------------------------------
-    });
+        socket.on('connect_error', (error) => {
+            console.warn('Socket.IO connection failed:', error.message);
+        });
+
+        socket.on('reconnect_failed', () => {
+            console.log('Socket.IO reconnection failed - continuing in standalone mode');
+            socket.disconnect();
+        });
+
+        socket.on('update_params', (params) => {
+            console.log('Received params update:', params);
+            if (params.particle_count) {
+                 console.log("Need to update particle count to:", params.particle_count);
+            }
+        });
+    } else {
+        console.log("Socket.IO not available - running in standalone mode");
+    }
 
     // Start the animation loop
     animate();
