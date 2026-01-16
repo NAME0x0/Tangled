@@ -1,6 +1,6 @@
 from flask import Flask, render_template, send_from_directory, request
 from flask_socketio import SocketIO, emit
-import eventlet # Use eventlet for async mode
+import gevent # Use gevent for async mode (eventlet is deprecated)
 
 # Initialize Flask app and SocketIO
 app = Flask(__name__)
