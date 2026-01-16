@@ -751,9 +751,13 @@ function init() {
 
     // --- Initialize Controls ---
     controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true; // Optional: Smooths out the controls
+    controls.enableDamping = true; // Smooths out the controls
     controls.dampingFactor = 0.05;
-    // controls.target.set(0, 0, 0); // Target is origin by default
+    controls.enableZoom = true;    // Explicitly enable zoom (scroll wheel)
+    controls.enablePan = true;     // Enable panning
+    controls.minDistance = 10;     // Minimum zoom distance
+    controls.maxDistance = 200;    // Maximum zoom distance
+    controls.target.set(0, 0, 0);  // Orbit around origin where particles are centered
 
     // --- Initialize WindowManager for multi-window coordination ---
     windowManager = new WindowManager();
@@ -1063,12 +1067,11 @@ function animate() {
         gpuCompute.compute();
     }
 
-    // --- 2. Update Particle Position for Screen-Space Alignment ---
+    // --- 2. Update Particle Position ---
+    // NOTE: Screen-space offset disabled for now to keep particles centered
+    // Multi-window coordinate system can be re-enabled later when fully implemented
     if (particlePoints) {
-        // Apply scene offset so particles appear fixed relative to screen coordinates
-        // X offset moves particles left when window moves right (so they stay on screen)
-        // Y offset: screen Y increases downward, world Y increases upward
-        particlePoints.position.set(sceneOffset.x, sceneOffset.y, 0);
+        particlePoints.position.set(0, 0, 0);  // Keep particles centered at origin
     }
 
     // --- 3. Update Tendrils ---
@@ -1366,8 +1369,8 @@ function updateTendrils(elapsedTime) {
     const otherWindows = windowManager.getOtherWindows();
     updateTendrilTargets(otherWindows);
 
-    // Apply same position offset as main particle system
-    tendrilPoints.position.set(sceneOffset.x, sceneOffset.y, 0);
+    // Keep tendrils centered with the main particle system
+    tendrilPoints.position.set(0, 0, 0);
 }
 
 // Initialize everything
