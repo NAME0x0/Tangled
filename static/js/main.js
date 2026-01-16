@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { GPUComputationRenderer } from 'three/addons/misc/GPUComputationRenderer.js'; // Adjust path if needed
 // Import OrbitControls
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'; // Adjust path if needed
+// Import WindowManager for multi-window coordination
+import { WindowManager } from './WindowManager.js';
 
 // Define the pass-through vertex shader once
 const defaultPassThruVertexShader = `
@@ -170,6 +172,20 @@ uniform vec2 uTextureDimensions;
 // Wave Force Strength
 uniform float uWaveForceStrength;
 
+// Cross-Window Forces
+uniform vec2 uSceneOffset;
+uniform vec2 uThisWindowCenter;
+uniform vec2 uOtherWindow0Center;
+uniform float uOtherWindow0Active;
+uniform vec2 uOtherWindow1Center;
+uniform float uOtherWindow1Active;
+uniform vec2 uOtherWindow2Center;
+uniform float uOtherWindow2Active;
+uniform vec2 uOtherWindow3Center;
+uniform float uOtherWindow3Active;
+uniform float uCrossWindowAttractionStrength;
+uniform float uCrossWindowAttractionRadius;
+
 const float MIN_DIST_SQ = 0.01;
 
 ${simplexNoise3d}
@@ -294,6 +310,71 @@ vec3 calculateWaveForce(vec3 pos, float time) {
     return totalWaveForce;
 }
 
+// Function to calculate Cross-Window attraction force
+vec3 calculateCrossWindowForce(vec3 particlePos) {
+    vec3 totalForce = vec3(0.0);
+
+    // Convert particle position to screen space
+    vec2 particleScreen = particlePos.xy - uSceneOffset;
+
+    // Helper function inline - calculate force towards a window center
+    // For each active window, attract particles towards that window's center
+    float radius = uCrossWindowAttractionRadius;
+    float strength = uCrossWindowAttractionStrength;
+
+    // Window 0
+    if (uOtherWindow0Active > 0.5) {
+        vec2 toWindow = uOtherWindow0Center - particleScreen;
+        float dist = length(toWindow);
+        if (dist > 1.0 && dist < radius) {
+            vec2 dir = toWindow / dist;
+            // Smooth falloff - stronger when closer to edge of attraction radius
+            float falloff = smoothstep(radius, 0.0, dist);
+            // Also reduce force when very close to prevent instability
+            float nearFalloff = smoothstep(0.0, 100.0, dist);
+            totalForce.xy += dir * strength * falloff * nearFalloff;
+        }
+    }
+
+    // Window 1
+    if (uOtherWindow1Active > 0.5) {
+        vec2 toWindow = uOtherWindow1Center - particleScreen;
+        float dist = length(toWindow);
+        if (dist > 1.0 && dist < radius) {
+            vec2 dir = toWindow / dist;
+            float falloff = smoothstep(radius, 0.0, dist);
+            float nearFalloff = smoothstep(0.0, 100.0, dist);
+            totalForce.xy += dir * strength * falloff * nearFalloff;
+        }
+    }
+
+    // Window 2
+    if (uOtherWindow2Active > 0.5) {
+        vec2 toWindow = uOtherWindow2Center - particleScreen;
+        float dist = length(toWindow);
+        if (dist > 1.0 && dist < radius) {
+            vec2 dir = toWindow / dist;
+            float falloff = smoothstep(radius, 0.0, dist);
+            float nearFalloff = smoothstep(0.0, 100.0, dist);
+            totalForce.xy += dir * strength * falloff * nearFalloff;
+        }
+    }
+
+    // Window 3
+    if (uOtherWindow3Active > 0.5) {
+        vec2 toWindow = uOtherWindow3Center - particleScreen;
+        float dist = length(toWindow);
+        if (dist > 1.0 && dist < radius) {
+            vec2 dir = toWindow / dist;
+            float falloff = smoothstep(radius, 0.0, dist);
+            float nearFalloff = smoothstep(0.0, 100.0, dist);
+            totalForce.xy += dir * strength * falloff * nearFalloff;
+        }
+    }
+
+    return totalForce;
+}
+
 void main() {
     // Read previous state
     vec4 previousVelocityData = texture2D(uVelocityTexture, vUv);
@@ -380,6 +461,9 @@ void main() {
     // --- Coherent Wave Force ---
     vec3 waveForce = calculateWaveForce(particlePosition, uNoiseTime);
 
+    // --- Cross-Window Attraction Force ---
+    vec3 crossWindowForce = calculateCrossWindowForce(particlePosition);
+
     // --- Modify Forces within Membrane Zone ---
     // Reduce Wave force strength, increase Membrane Curl and Jitter strengths within the membrane zone
     float membraneWaveReductionFactor = 1.0 - membraneZoneFactor * 0.9; // Reduce wave by up to 90%
@@ -395,7 +479,8 @@ void main() {
                       curlNoiseForce + directNoiseForce +                  // General Cytoplasm noise
                       modifiedMembraneCurlForce + modifiedAmbientJitterForce + // Modified Membrane noise
                       inertiaForce +                                       // Inertia
-                      modifiedWaveForce * uWaveForceStrength;              // Modified Wave Force
+                      modifiedWaveForce * uWaveForceStrength +             // Modified Wave Force
+                      crossWindowForce;                                    // Cross-Window attraction
 
     // --- Apply Forces to Velocity ---
     particleVelocity += totalForce;
@@ -472,71 +557,142 @@ const particleVertexShader = `
 // attribute vec2 uv; // Provided by Three.js
 
 uniform sampler2D uPositionTexture;
+uniform sampler2D uVelocityTexture;
 uniform float uPointSize;
+uniform float uTime;
+uniform vec3 uAttractorPos;
+uniform float uMembraneMinRadius;
+uniform float uMembraneMaxRadius;
 
-varying vec2 vUv; // Pass UV to fragment shader if needed
+varying float vDistFromCenter;
+varying float vSpeed;
+varying float vAge;
+varying vec3 vColor;
 
 void main() {
-    vUv = uv; // Use the built-in uv attribute
-
     vec4 positionData = texture2D(uPositionTexture, uv);
     vec3 particlePosition = positionData.xyz;
+    float age = positionData.w;
+
+    vec4 velocityData = texture2D(uVelocityTexture, uv);
+    vec3 velocity = velocityData.xyz;
+    float speed = length(velocity);
+
+    // Calculate distance from attractor/center
+    float distFromCenter = length(particlePosition - uAttractorPos);
+
+    // Pass to fragment shader
+    vDistFromCenter = distFromCenter;
+    vSpeed = speed;
+    vAge = age;
+
+    // Color based on position and velocity
+    // Core: warm colors (red/orange), Membrane: cool colors (cyan/blue)
+    float normalizedDist = smoothstep(0.0, uMembraneMaxRadius, distFromCenter);
+
+    // Base color gradient from warm to cool
+    vec3 coreColor = vec3(1.0, 0.3, 0.1);      // Orange-red
+    vec3 midColor = vec3(1.0, 0.8, 0.4);       // Golden yellow
+    vec3 membraneColor = vec3(0.2, 0.8, 1.0);  // Cyan
+
+    // Two-stage gradient
+    if (normalizedDist < 0.4) {
+        vColor = mix(coreColor, midColor, normalizedDist / 0.4);
+    } else {
+        vColor = mix(midColor, membraneColor, (normalizedDist - 0.4) / 0.6);
+    }
+
+    // Add velocity-based color intensity
+    float speedInfluence = smoothstep(0.0, 1.5, speed);
+    vColor = mix(vColor * 0.6, vColor * 1.2, speedInfluence);
 
     vec4 mvPosition = modelViewMatrix * vec4(particlePosition, 1.0);
     gl_Position = projectionMatrix * mvPosition;
 
-    gl_PointSize = uPointSize;
+    // Dynamic point size based on speed and distance
+    float baseSizeFromSpeed = mix(0.8, 2.0, speedInfluence);
+    float sizeFromDist = mix(1.2, 0.8, normalizedDist); // Slightly larger near core
+    gl_PointSize = uPointSize * baseSizeFromSpeed * sizeFromDist * (300.0 / -mvPosition.z);
 }
 `;
 
 const particleFragmentShader = `
 // Particle Rendering Fragment Shader
-precision highp float; // Add precision statement
-varying vec2 vUv; // Comes from vertex shader
+precision highp float;
 
-// TODO: Add uniforms for attractors, age texture, etc. for coloring/fading
+varying float vDistFromCenter;
+varying float vSpeed;
+varying float vAge;
+varying vec3 vColor;
+
+uniform float uMembraneMaxRadius;
 
 void main() {
-    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); // White, fully opaque
+    // Soft circular particle
+    vec2 center = gl_PointCoord - vec2(0.5);
+    float dist = length(center);
+
+    // Soft edge falloff
+    float alpha = 1.0 - smoothstep(0.2, 0.5, dist);
+
+    // Fade based on speed (faster = more visible)
+    float speedAlpha = smoothstep(0.02, 0.8, vSpeed);
+    alpha *= mix(0.3, 1.0, speedAlpha);
+
+    // Slight fade at extreme membrane edge
+    float edgeFade = 1.0 - smoothstep(uMembraneMaxRadius * 0.9, uMembraneMaxRadius * 1.1, vDistFromCenter);
+    alpha *= mix(0.5, 1.0, edgeFade);
+
+    // Add subtle glow effect
+    float glow = exp(-dist * 4.0) * 0.5;
+    vec3 finalColor = vColor + vec3(glow);
+
+    if (alpha < 0.01) discard;
+
+    gl_FragColor = vec4(finalColor, alpha);
 }
 `;
 
 // --- Simulation Constants ---
 // Size of the texture storing particle data (WIDTH x WIDTH particles)
-const TEXTURE_WIDTH = 192; // Increased particle count (192*192 = 36864)
+const TEXTURE_WIDTH = 256; // Increased particle count (256*256 = 65536)
 const PARTICLE_COUNT = TEXTURE_WIDTH * TEXTURE_WIDTH;
-const DAMPING = 0.98;             // Base damping
-const ATTRACTOR_STRENGTH = 2.0;   // Slightly reduce attraction to balance membrane forces
+const DAMPING = 0.975;            // Slightly less damping for more fluid motion
+const ATTRACTOR_STRENGTH = 1.8;   // Slightly reduce attraction to balance membrane forces
 // const MAX_RADIUS = 40.0;        // Replaced by membrane radii
 // const RESPAWN_RADIUS = 5.0;     // Replaced by membrane forces
-const REPULSION_RADIUS = 1.5;   // Slightly larger nucleus repulsion
-const REPULSION_STRENGTH = 8.0; // Reduced
-const ORBIT_RADIUS = 6.0;     // Slightly larger orbit zone
-const ORBIT_STRENGTH = 0.6;
-const OUTWARD_PUSH_STRENGTH = 0.05; // Reduced
-const MEMBRANE_MIN_RADIUS = 36.0; // Tightened range
-const MEMBRANE_MAX_RADIUS = 39.0; // Tightened range
-const MEMBRANE_PUSH_STRENGTH = 5.0;
-const MEMBRANE_PULL_STRENGTH = 2.5; // Increased pull (jelly)
-const MAX_VELOCITY = 2.0; // Added velocity limit
-const NOISE_SCALE = 0.06;
-const NOISE_STRENGTH = 0.05;        // Reduced drastically
-const DIRECT_NOISE_STRENGTH = 0.01; // Reduced drastically
-const NOISE_SPEED = 0.5;
+const REPULSION_RADIUS = 2.0;   // Slightly larger nucleus repulsion
+const REPULSION_STRENGTH = 6.0; // Reduced for smoother core
+const ORBIT_RADIUS = 8.0;     // Larger orbit zone for more swirling
+const ORBIT_STRENGTH = 0.8;   // Stronger orbital motion
+const OUTWARD_PUSH_STRENGTH = 0.08; // Slightly more push
+const MEMBRANE_MIN_RADIUS = 34.0; // Tightened range
+const MEMBRANE_MAX_RADIUS = 40.0; // Slightly larger
+const MEMBRANE_PUSH_STRENGTH = 4.0;
+const MEMBRANE_PULL_STRENGTH = 3.0; // Stronger pull (jelly)
+const MAX_VELOCITY = 2.5; // Slightly higher velocity limit
+const NOISE_SCALE = 0.08;  // More noise influence
+const NOISE_STRENGTH = 0.15;        // Increased for more organic movement
+const DIRECT_NOISE_STRENGTH = 0.03; // Increased
+const NOISE_SPEED = 0.6;  // Faster noise evolution
 const NOISE_EPSILON = 0.01;
 // Membrane Curl Noise
-const MEMBRANE_CURL_NOISE_SCALE = 0.4;
-const MEMBRANE_CURL_NOISE_STRENGTH = 0.05; // Reduced drastically
+const MEMBRANE_CURL_NOISE_SCALE = 0.3;
+const MEMBRANE_CURL_NOISE_STRENGTH = 0.12; // Increased for surface flow
 // Ambient Jitter
-const AMBIENT_JITTER_STRENGTH = 0.005; // Reduced drastically
+const AMBIENT_JITTER_STRENGTH = 0.015; // More subtle movement
 // Inertia
-const INERTIA_STRENGTH = 50.0;
+const INERTIA_STRENGTH = 60.0;  // More responsive to camera rotation
 // Advection
-const ADVECTION_FACTOR = 0.2;
+const ADVECTION_FACTOR = 0.25;  // More coherent flow
 // Wave Force
-const WAVE_FORCE_STRENGTH = 2.5;     // Strength of the new wave force
+const WAVE_FORCE_STRENGTH = 3.0;     // Stronger wave force
 // Spawn
-const INITIAL_SPAWN_RADIUS = 20.0;
+const INITIAL_SPAWN_RADIUS = 25.0;  // Larger initial spread
+// Cross-Window Forces
+const CROSS_WINDOW_ATTRACTION_STRENGTH = 1.5;  // Much stronger attraction
+const CROSS_WINDOW_ATTRACTION_RADIUS = 800.0;  // Larger attraction radius
+const CROSS_WINDOW_TENDRIL_STRENGTH = 0.6;
 
 let scene, camera, renderer;
 let socket;
@@ -560,6 +716,26 @@ const attractorPos = new THREE.Vector3(0, 0, 0);
 // --- Control Variables ---
 let controls;
 
+// --- Multi-Window Variables ---
+let windowManager;
+let sceneOffset = { x: 0, y: 0 };
+let sceneOffsetTarget = { x: 0, y: 0 };
+const MAX_OTHER_WINDOWS = 4;
+// Store other window centers for cross-window forces
+let otherWindowCenters = [
+    { x: 0, y: 0, active: false },
+    { x: 0, y: 0, active: false },
+    { x: 0, y: 0, active: false },
+    { x: 0, y: 0, active: false }
+];
+
+// --- Tendril System Variables ---
+let tendrilPoints;
+let tendrilGeometry;
+let tendrilMaterial;
+const TENDRIL_PARTICLE_COUNT = 3000; // Particles per tendril connection (increased)
+const TENDRIL_MAX_CONNECTIONS = 4;
+
 function init() {
     // --- Basic Three.js Setup ---
     clock = new THREE.Clock();
@@ -579,9 +755,35 @@ function init() {
     controls.dampingFactor = 0.05;
     // controls.target.set(0, 0, 0); // Target is origin by default
 
+    // --- Initialize WindowManager for multi-window coordination ---
+    windowManager = new WindowManager();
+    windowManager.init({ particleColor: '#ffffff' });
+    windowManager.setWinChangeCallback((otherWindows) => {
+        updateOtherWindowUniforms(otherWindows);
+    });
+    windowManager.setWinShapeChangeCallback((shape) => {
+        // Update target scene offset when window moves
+        // Convert screen coords (origin top-left, Y down) to world coords (origin center, Y up)
+        sceneOffsetTarget.x = -shape.x - shape.w / 2;
+        sceneOffsetTarget.y = shape.y + shape.h / 2;
+    });
+
+    // Set initial scene offset based on current window position
+    const initialShape = {
+        x: window.screenX || 0,
+        y: window.screenY || 0,
+        w: window.innerWidth,
+        h: window.innerHeight
+    };
+    sceneOffsetTarget.x = -initialShape.x - initialShape.w / 2;
+    sceneOffsetTarget.y = initialShape.y + initialShape.h / 2;
+    sceneOffset.x = sceneOffsetTarget.x;
+    sceneOffset.y = sceneOffsetTarget.y;
+
     // --- Initialize GPGPU ---
     initComputeRenderer();
     initParticleGeometry();
+    initTendrils();
 
     // Handle window resize
     window.addEventListener('resize', onWindowResize, false);
@@ -697,7 +899,20 @@ function initComputeRenderer() {
              uInertiaStrength: { value: INERTIA_STRENGTH },
              uAdvectionFactor: { value: ADVECTION_FACTOR },
              uTextureDimensions: { value: new THREE.Vector2(TEXTURE_WIDTH, TEXTURE_WIDTH) },
-             uWaveForceStrength: { value: WAVE_FORCE_STRENGTH }
+             uWaveForceStrength: { value: WAVE_FORCE_STRENGTH },
+             // Cross-Window uniforms
+             uSceneOffset: { value: new THREE.Vector2(0, 0) },
+             uThisWindowCenter: { value: new THREE.Vector2(0, 0) },
+             uOtherWindow0Center: { value: new THREE.Vector2(0, 0) },
+             uOtherWindow0Active: { value: 0.0 },
+             uOtherWindow1Center: { value: new THREE.Vector2(0, 0) },
+             uOtherWindow1Active: { value: 0.0 },
+             uOtherWindow2Center: { value: new THREE.Vector2(0, 0) },
+             uOtherWindow2Active: { value: 0.0 },
+             uOtherWindow3Center: { value: new THREE.Vector2(0, 0) },
+             uOtherWindow3Active: { value: 0.0 },
+             uCrossWindowAttractionStrength: { value: CROSS_WINDOW_ATTRACTION_STRENGTH },
+             uCrossWindowAttractionRadius: { value: CROSS_WINDOW_ATTRACTION_RADIUS }
         }
     });
     // ---------------------------------------
@@ -740,7 +955,12 @@ function initParticleGeometry() {
     const particleMaterial = new THREE.ShaderMaterial({
         uniforms: {
             uPositionTexture: { value: null },
-            uPointSize: { value: 1.0 }
+            uVelocityTexture: { value: null },
+            uPointSize: { value: 1.5 },
+            uTime: { value: 0.0 },
+            uAttractorPos: { value: attractorPos },
+            uMembraneMinRadius: { value: MEMBRANE_MIN_RADIUS },
+            uMembraneMaxRadius: { value: MEMBRANE_MAX_RADIUS }
         },
         vertexShader: particleVertexShader,
         fragmentShader: particleFragmentShader,
@@ -767,7 +987,16 @@ function animate() {
     const deltaTime = clock.getDelta();
     const elapsedTime = clock.getElapsedTime();
 
-    // --- Calculate Camera Rotation Delta --- 
+    // --- Update WindowManager ---
+    if (windowManager) {
+        windowManager.update();
+    }
+
+    // --- Smoothly interpolate scene offset ---
+    sceneOffset.x += (sceneOffsetTarget.x - sceneOffset.x) * 0.1;
+    sceneOffset.y += (sceneOffsetTarget.y - sceneOffset.y) * 0.1;
+
+    // --- Calculate Camera Rotation Delta ---
     const currentQuaternion = camera.quaternion.clone();
     const deltaQuaternion = currentQuaternion.clone().multiply(lastCameraQuaternion.clone().invert());
     cameraRotationAngle = 2 * Math.acos(THREE.MathUtils.clamp(deltaQuaternion.w, -1, 1)); // Clamp w
@@ -789,17 +1018,338 @@ function animate() {
         velocityVariable.material.uniforms.uCameraRotationAxis.value.copy(cameraRotationAxis);
         velocityVariable.material.uniforms.uCameraRotationAngle.value = cameraRotationAngle;
 
+        // Update cross-window uniforms
+        velocityVariable.material.uniforms.uSceneOffset.value.set(sceneOffset.x, sceneOffset.y);
+
+        // Update this window's center
+        const thisWindow = windowManager ? windowManager.getThisWindow() : null;
+        if (thisWindow) {
+            velocityVariable.material.uniforms.uThisWindowCenter.value.set(
+                thisWindow.center.x,
+                thisWindow.center.y
+            );
+        }
+
+        // Update other window centers
+        for (let i = 0; i < MAX_OTHER_WINDOWS; i++) {
+            const centerUniform = velocityVariable.material.uniforms[`uOtherWindow${i}Center`];
+            const activeUniform = velocityVariable.material.uniforms[`uOtherWindow${i}Active`];
+            if (otherWindowCenters[i].active) {
+                centerUniform.value.set(otherWindowCenters[i].x, otherWindowCenters[i].y);
+                activeUniform.value = 1.0;
+            } else {
+                activeUniform.value = 0.0;
+            }
+        }
+
         gpuCompute.compute();
     }
 
-    // --- 2. Render Particles ---
+    // --- 2. Update Particle Position for Screen-Space Alignment ---
+    if (particlePoints) {
+        // Apply scene offset so particles appear fixed relative to screen coordinates
+        // X offset moves particles left when window moves right (so they stay on screen)
+        // Y offset: screen Y increases downward, world Y increases upward
+        particlePoints.position.set(sceneOffset.x, sceneOffset.y, 0);
+    }
+
+    // --- 3. Update Tendrils ---
+    if (tendrilPoints && windowManager) {
+        updateTendrils(elapsedTime);
+    }
+
+    // --- 4. Render Particles ---
     if (particlePoints && gpuCompute) {
         const material = particlePoints.material;
-        // IMPORTANT: Use the *updated* position texture for rendering
+        // IMPORTANT: Use the *updated* textures for rendering
         material.uniforms.uPositionTexture.value = gpuCompute.getCurrentRenderTarget(positionVariable).texture;
+        material.uniforms.uVelocityTexture.value = gpuCompute.getCurrentRenderTarget(velocityVariable).texture;
+        material.uniforms.uTime.value = elapsedTime;
     }
 
     renderer.render(scene, camera);
+}
+
+/**
+ * Update the other window centers array from WindowManager data
+ */
+function updateOtherWindowUniforms(otherWindows) {
+    // Reset all windows to inactive
+    for (let i = 0; i < MAX_OTHER_WINDOWS; i++) {
+        otherWindowCenters[i].active = false;
+    }
+
+    // Set active windows (up to MAX_OTHER_WINDOWS)
+    const count = Math.min(otherWindows.length, MAX_OTHER_WINDOWS);
+    for (let i = 0; i < count; i++) {
+        const win = otherWindows[i];
+        otherWindowCenters[i].x = win.center.x;
+        otherWindowCenters[i].y = win.center.y;
+        otherWindowCenters[i].active = true;
+    }
+
+    // Update tendril targets
+    updateTendrilTargets(otherWindows);
+}
+
+/**
+ * Initialize the tendril particle system
+ */
+function initTendrils() {
+    const totalParticles = TENDRIL_PARTICLE_COUNT * TENDRIL_MAX_CONNECTIONS;
+
+    tendrilGeometry = new THREE.BufferGeometry();
+
+    // Attributes: position, age (progress along tendril), connectionIndex, randomSeed
+    const positions = new Float32Array(totalParticles * 3);
+    const ages = new Float32Array(totalParticles);
+    const connectionIndices = new Float32Array(totalParticles);
+    const randomSeeds = new Float32Array(totalParticles);
+
+    for (let c = 0; c < TENDRIL_MAX_CONNECTIONS; c++) {
+        for (let i = 0; i < TENDRIL_PARTICLE_COUNT; i++) {
+            const idx = c * TENDRIL_PARTICLE_COUNT + i;
+
+            // Initial positions at origin (will be updated by shader/CPU)
+            positions[idx * 3] = 0;
+            positions[idx * 3 + 1] = 0;
+            positions[idx * 3 + 2] = 0;
+
+            // Age represents position along tendril (0 = start, 1 = end)
+            ages[idx] = i / TENDRIL_PARTICLE_COUNT;
+
+            // Which connection this particle belongs to
+            connectionIndices[idx] = c;
+
+            // Random seed for wave variation
+            randomSeeds[idx] = Math.random();
+        }
+    }
+
+    tendrilGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    tendrilGeometry.setAttribute('age', new THREE.BufferAttribute(ages, 1));
+    tendrilGeometry.setAttribute('connectionIndex', new THREE.BufferAttribute(connectionIndices, 1));
+    tendrilGeometry.setAttribute('randomSeed', new THREE.BufferAttribute(randomSeeds, 1));
+
+    // Tendril shader material
+    const tendrilVertexShader = `
+        attribute float age;
+        attribute float connectionIndex;
+        attribute float randomSeed;
+
+        uniform float uTime;
+        uniform vec3 uThisCenter;
+        uniform vec3 uTargetCenters[4];
+        uniform float uTargetActive[4];
+
+        varying float vAlpha;
+        varying vec3 vColor;
+        varying float vWaveIntensity;
+
+        void main() {
+            int connIdx = int(connectionIndex);
+
+            // Check if this connection is active
+            float isActive = 0.0;
+            vec3 targetCenter = vec3(0.0);
+
+            // Manual array indexing (GLSL ES limitations)
+            if (connIdx == 0) {
+                isActive = uTargetActive[0];
+                targetCenter = uTargetCenters[0];
+            } else if (connIdx == 1) {
+                isActive = uTargetActive[1];
+                targetCenter = uTargetCenters[1];
+            } else if (connIdx == 2) {
+                isActive = uTargetActive[2];
+                targetCenter = uTargetCenters[2];
+            } else if (connIdx == 3) {
+                isActive = uTargetActive[3];
+                targetCenter = uTargetCenters[3];
+            }
+
+            if (isActive < 0.5) {
+                // Hide inactive particles
+                gl_Position = vec4(0.0, 0.0, -1000.0, 1.0);
+                gl_PointSize = 0.0;
+                vAlpha = 0.0;
+                return;
+            }
+
+            // Interpolate position along the tendril path
+            vec3 startPos = uThisCenter;
+            vec3 endPos = targetCenter;
+            vec3 direction = endPos - startPos;
+            float distance = length(direction);
+
+            // Animated progress along tendril (flowing effect)
+            float flowSpeed = 0.3;
+            float animatedAge = fract(age + uTime * flowSpeed);
+
+            // Base position along the line
+            vec3 pos = mix(startPos, endPos, animatedAge);
+
+            // Add wave motion perpendicular to the connection
+            vec3 perpendicular = normalize(cross(direction, vec3(0.0, 0.0, 1.0)));
+            if (length(perpendicular) < 0.1) {
+                perpendicular = normalize(cross(direction, vec3(0.0, 1.0, 0.0)));
+            }
+
+            // Wave amplitude strongest in middle, zero at endpoints
+            float waveEnvelope = sin(animatedAge * 3.14159);
+            waveEnvelope = pow(waveEnvelope, 0.7); // Broader envelope
+
+            // Multiple wave frequencies for organic, flowing look
+            float wave1 = sin(animatedAge * 25.0 + uTime * 4.0 + randomSeed * 6.28) * 20.0;
+            float wave2 = sin(animatedAge * 40.0 - uTime * 3.0 + randomSeed * 3.14) * 12.0;
+            float wave3 = sin(animatedAge * 12.0 + uTime * 2.0) * 25.0;
+            float wave4 = sin(animatedAge * 60.0 + uTime * 5.0 + randomSeed * 2.0) * 8.0;
+
+            float totalWave = (wave1 + wave2 + wave3 + wave4) * waveEnvelope;
+            vWaveIntensity = abs(totalWave) / 50.0;
+
+            // Also add some Z variation for depth
+            float zWave = sin(animatedAge * 18.0 + uTime * 3.0 + randomSeed * 4.0) * 15.0 * waveEnvelope;
+
+            pos += perpendicular * totalWave;
+            pos.z += zWave;
+
+            // Transform to view space
+            vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+            gl_Position = projectionMatrix * mvPosition;
+
+            // Size based on wave envelope and position
+            float sizeFromWave = 1.0 + vWaveIntensity * 0.5;
+            gl_PointSize = (2.0 + waveEnvelope * 1.5) * sizeFromWave * (300.0 / -mvPosition.z);
+
+            // Alpha: fade at endpoints, based on distance between windows
+            float distanceFade = smoothstep(1200.0, 300.0, distance);
+            vAlpha = waveEnvelope * 0.8 * distanceFade;
+
+            // Dynamic color gradient - flowing rainbow effect
+            float colorPhase = animatedAge + uTime * 0.2;
+            vec3 colorStart = vec3(0.0, 0.9, 1.0);    // Bright cyan
+            vec3 colorMid = vec3(0.8, 0.3, 1.0);      // Purple
+            vec3 colorEnd = vec3(1.0, 0.4, 0.6);      // Pink
+
+            // Three-stage color gradient
+            if (colorPhase < 0.5) {
+                vColor = mix(colorStart, colorMid, colorPhase * 2.0);
+            } else {
+                vColor = mix(colorMid, colorEnd, (colorPhase - 0.5) * 2.0);
+            }
+
+            // Brighten based on wave intensity
+            vColor *= (1.0 + vWaveIntensity * 0.5);
+        }
+    `;
+
+    const tendrilFragmentShader = `
+        precision highp float;
+
+        varying float vAlpha;
+        varying vec3 vColor;
+        varying float vWaveIntensity;
+
+        void main() {
+            if (vAlpha < 0.01) discard;
+
+            // Soft circular particle with glow
+            vec2 center = gl_PointCoord - vec2(0.5);
+            float dist = length(center);
+
+            // Core and glow
+            float core = 1.0 - smoothstep(0.0, 0.3, dist);
+            float glow = exp(-dist * 3.0) * 0.6;
+            float alpha = (core + glow) * vAlpha;
+
+            // Add slight color variation based on wave intensity
+            vec3 finalColor = vColor + vec3(vWaveIntensity * 0.3);
+
+            gl_FragColor = vec4(finalColor, alpha);
+        }
+    `;
+
+    tendrilMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            uTime: { value: 0.0 },
+            uThisCenter: { value: new THREE.Vector3(0, 0, 0) },
+            uTargetCenters: { value: [
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, 0)
+            ]},
+            uTargetActive: { value: [0.0, 0.0, 0.0, 0.0] }
+        },
+        vertexShader: tendrilVertexShader,
+        fragmentShader: tendrilFragmentShader,
+        blending: THREE.AdditiveBlending,
+        transparent: true,
+        depthWrite: false
+    });
+
+    tendrilPoints = new THREE.Points(tendrilGeometry, tendrilMaterial);
+    scene.add(tendrilPoints);
+
+    console.log("Tendril system initialized");
+}
+
+/**
+ * Update tendril target positions from other windows
+ */
+function updateTendrilTargets(otherWindows) {
+    if (!tendrilMaterial) return;
+
+    const targets = tendrilMaterial.uniforms.uTargetCenters.value;
+    const active = tendrilMaterial.uniforms.uTargetActive.value;
+
+    // Reset all to inactive
+    for (let i = 0; i < TENDRIL_MAX_CONNECTIONS; i++) {
+        active[i] = 0.0;
+    }
+
+    // Set active targets
+    const count = Math.min(otherWindows.length, TENDRIL_MAX_CONNECTIONS);
+    for (let i = 0; i < count; i++) {
+        const win = otherWindows[i];
+        // Convert screen coordinates to world coordinates
+        // Screen: origin top-left, Y down
+        // World: origin center, Y up
+        // Other window center in world coords = (-screenCenterX, screenCenterY)
+        // But we also need to account for the fact that particlePoints has sceneOffset applied
+        // So the relative position is what matters
+        const worldX = -win.center.x;
+        const worldY = win.center.y;
+        targets[i].set(worldX, worldY, 0);
+        active[i] = 1.0;
+    }
+}
+
+/**
+ * Update tendrils each frame
+ */
+function updateTendrils(elapsedTime) {
+    if (!tendrilMaterial || !windowManager) return;
+
+    // Update time
+    tendrilMaterial.uniforms.uTime.value = elapsedTime;
+
+    // Update this window's center in world space
+    const thisWindow = windowManager.getThisWindow();
+    if (thisWindow) {
+        // This window's center in world coords
+        const worldX = -thisWindow.center.x;
+        const worldY = thisWindow.center.y;
+        tendrilMaterial.uniforms.uThisCenter.value.set(worldX, worldY, 0);
+    }
+
+    // Update target centers (other windows may have moved)
+    const otherWindows = windowManager.getOtherWindows();
+    updateTendrilTargets(otherWindows);
+
+    // Apply same position offset as main particle system
+    tendrilPoints.position.set(sceneOffset.x, sceneOffset.y, 0);
 }
 
 // Initialize everything

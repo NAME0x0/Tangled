@@ -1,113 +1,196 @@
-# TODO List: Tangled Web (Entangled Recreation)
+# TODO List: Tangled (Entangled Recreation)
 
-This list outlines the steps needed to transition from the current foundational Flask/SocketIO/Three.js setup (rotating cube) to the target visualization inspired by Bjørn Staal's "Entangled" project, focusing on multi-window GPU particles.
+Recreation of Bjørn Staal's "Entangled" project - a generative art piece where GPU-accelerated particle simulations in separate browser windows detect and interact with one another based on their relative screen coordinates.
 
-## I. Foundational Setup (Partially Completed)
+## Project Status: ~45% Complete
 
--   [x] Set up Flask backend server (`app.py`).
--   [x] Serve basic HTML (`index.html`), CSS (`style.css`), and JS (`main.js`).
--   [x] Include Three.js library (r176, using `three.module.js` via import map).
--   [x] Establish WebSocket connection (Flask-SocketIO client <-> server using `eventlet`).
--   [x] Set up basic Three.js scene (scene, camera, renderer, canvas) in `main.js`.
--   [x] Implement basic animation loop (`requestAnimationFrame`) in `main.js`.
--   [x] Render a placeholder object (currently a rotating, color-cycling cube).
+The single-window GPGPU particle system is fully functional. The entire multi-window coordination layer (the core "Entangled" feature) is not yet implemented.
 
-## II. Core GPU Particle System Implementation (GPGPU in Three.js)
+---
 
--   [ ] **Research & Setup GPGPU:**
-    -   [x] Study Three.js examples for GPU-Compute / GPGPU particle systems (using `WebGLRenderTarget` and `DataTexture`).
-    -   [x] Design data structure for particle state (position, velocity, age, etc.) to be stored in textures.
-    -   [x] Create `WebGLRenderTarget` instances for ping-ponging particle state textures during updates.
-    -   [x] Create initial `DataTexture` instances to hold the starting state of particles.
--   [ ] **Particle Update Shaders (GLSL):**
-    -   [x] Create `gpgpu_passthru.vert` shader (simple pass-through usually).
-    -   [x] Create `gpgpu_velocity.frag` shader containing basic damping logic:
-        -   [x] Read previous particle state (velocity) from input texture uniform.
-        -   [ ] Implement velocity integration (forces to be added later).
-        -   [x] Implement damping/friction (`velocity *= dampingFactor`).
-        -   [x] Implement attractor force logic (calculate vector towards attractor uniforms, apply force).
-        -   [ ] Implement 3D noise (Perlin/Curl) force logic (sample noise field, apply force).
-        -   [ ] Implement particle lifespan check and respawn logic (reset position/velocity if age > maxAge).
-        -   [x] Write updated particle state (velocity) to `gl_FragColor`.
-    -   [x] Create `gpgpu_position.frag` shader containing basic position update logic:
-        -   [x] Read previous particle state (position) and updated velocity state.
-        -   [x] Implement basic velocity integration (`newPos = oldPos + velocity * deltaTime`).
-        -   [x] Implement particle lifespan check and respawn logic (reset position/velocity if age > maxAge).
-        -   [x] Write updated particle state (position, age) to `gl_FragColor`.
--   [ ] **Particle Rendering Shaders (GLSL):**
-    -   [x] Create `particle_render.vert` shader:
-        -   [x] Read particle position from GPGPU state texture (using particle index/ID).
-        -   [x] Set `gl_Position` based on particle position and camera matrices.
-        -   [x] Set `gl_PointSize` (can be varied based on uniforms or attributes like age/velocity passed from GPGPU texture).
-    -   [x] Create `particle_render.frag` shader:
-        -   [x] Set `gl_FragColor`. Implement base particle color.
-        -   [ ] Implement logic for Red/Green coloring based on proximity/influence of attractors (passed as uniforms).
-        -   [ ] Implement alpha fading (based on age/velocity?).
--   [ ] **Integrate GPGPU into `main.js`:**
-    -   [x] Create `BufferGeometry` for the particles (just need indices/IDs).
-    -   [x] Create `ShaderMaterial` for the GPGPU update pass, linking the update shaders and state textures.
-    -   [x] Create `ShaderMaterial` for rendering, linking the render shaders and the *current* GPGPU state texture.
-    -   [x] In the animation loop:
-        -   [x] Run the GPGPU update pass (render update shader to the *next* state texture).
-        -   [x] Swap the ping-pong textures.
-        -   [x] Render the `Points` object using the *current* state texture and render shaders.
-    -   [x] Remove the placeholder cube rendering.
-    -   [x] Enable additive blending for the renderer: `renderer.setBlending(THREE.AdditiveBlending);`.
+## I. Foundation (COMPLETE)
 
-## III. Implementing "Entangled" Visual Specifics
+- [x] Flask backend server (`app.py`) with eventlet async mode
+- [x] Serve HTML (`templates/index.html`), CSS (`static/css/style.css`), JS (`static/js/main.js`)
+- [x] Three.js library (r176) with ES6 module imports
+- [x] Socket.IO connection (Flask-SocketIO client <-> server)
+- [x] Basic Three.js scene (scene, camera, renderer, canvas)
+- [x] Animation loop with `requestAnimationFrame`
+- [x] OrbitControls for camera navigation
+- [x] Window resize handling
 
--   [x] **Attractors:**
-    -   [x] Define positions for at least two main attractors in `main.js`. (Initially two, now one)
-    -   [x] Pass attractor positions and strengths as uniforms to the GPGPU update shader.
-    -   [ ] Pass attractor positions to the render fragment shader for color logic.
--   [x] **Noise Field:**
-    -   [x] Pass noise parameters (scale, strength, time/evolution) as uniforms to the GPGPU update shader.
--   [ ] **Coloring:**
-    -   [ ] Refine the Red/Green split logic in the render fragment shader.
--   [ ] **"Tendril" Connection:**
-    -   [ ] Design and implement the visual link (e.g., dedicated particle stream, `LineSegments`, or `TubeGeometry` between attractors).
--   [x] **Particle Physics Refinements (Added):**
-    -   [x] Implement boundary check/respawn.
-    -   [x] Implement repulsion force near attractor core.
-    -   [x] Implement orbit force near attractor.
-    -   [x] Implement outward push force for 'membrane' effect.
+## II. GPGPU Particle System (COMPLETE)
 
-## IV. Multi-Window Simulation / Synchronization
+- [x] GPUComputationRenderer setup with ping-pong textures
+- [x] Position and velocity DataTexture creation (192x192 = 36,864 particles)
+- [x] Initial particle spawn (spherical distribution)
+- [x] Particle BufferGeometry with UV mapping
+- [x] Points mesh with ShaderMaterial
+- [x] Additive blending for glow effect
 
--   [ ] **Strategy:** Decide on synchronization method (localStorage, BroadcastChannel, Server Relay via WebSocket). *Start with localStorage for simplicity.*
--   [ ] **Window Management:**
-    -   [ ] Implement logic in `main.js` to detect if it's the primary window or a secondary window (e.g., check `window.opener` or a URL parameter).
-    -   [ ] Add a button or mechanism in the primary window to open secondary windows (`window.open`).
--   [ ] **State Synchronization:**
-    -   [ ] Define which parameters need syncing (likely attractor positions, noise settings, colors, time).
-    -   [ ] Implement writing key simulation parameters to localStorage from the primary window.
-    -   [ ] Implement reading parameters from localStorage in secondary windows and updating their simulation/uniforms accordingly.
-    -   [ ] Ensure smooth synchronization (handle potential race conditions or initial load states).
--   [ ] **Views:**
-    -   [ ] Adjust initial camera positions in primary/secondary windows to frame their respective attractors/regions.
+### Velocity Shader Forces (COMPLETE)
+- [x] Attractor force with distance-squared falloff
+- [x] Repulsion force near attractor core
+- [x] Orbit force (tangential) in middle zone
+- [x] Outward push force with smoothstep modulation
+- [x] Curl noise force (simplex 3D noise with central differences)
+- [x] Direct noise force (independent xyz channels)
+- [x] Membrane curl noise (surface-specific)
+- [x] Ambient jitter force (subtle continuous perturbation)
+- [x] Camera rotation inertia force
+- [x] Wave force (5 superposed sine waves)
+- [x] Membrane boundary forces (push/pull at radius limits)
+- [x] Velocity damping with distance modulation
+- [x] Velocity clamping (max velocity limit)
+- [x] Velocity advection
 
-## V. Interaction & Backend Integration (WebSocket Enhancement)
+### Position Shader (COMPLETE)
+- [x] Velocity integration (`position += velocity * dt`)
+- [x] Age increment tracking
 
--   [x] **Add Camera Controls:** Implement OrbitControls for user navigation.
--   [ ] **Server State:**
-    -   [ ] Move the canonical simulation parameters (attractor positions, noise settings, etc.) to the server (`app.py`).
-    -   [ ] Send these parameters to new clients on connection via SocketIO.
--   [ ] **Client Updates:**
-    -   [ ] Refine client-side SocketIO listeners (`main.js`) to update shader uniforms when parameters are received from the server.
--   [ ] **User Controls (Optional but Recommended):**
-    -   [ ] Add HTML sliders/buttons to `index.html` to control parameters (e.g., attractor X/Y/Z, noise strength).
-    -   [ ] Add event listeners in `main.js` to detect UI changes.
-    -   [ ] Emit SocketIO messages from the client to the server when the user changes a parameter.
--   [ ] **Server Broadcast:**
-    -   [ ] Implement SocketIO listeners on the server (`app.py`) to receive parameter change requests.
-    -   [ ] Update the server-side state.
-    -   [ ] Broadcast the *updated* parameters to *all* connected clients.
+### Render Shaders (PARTIAL)
+- [x] Position fetch from GPGPU texture
+- [x] Camera matrix transformations
+- [x] Point size from uniform
+- [ ] Dynamic point size based on velocity/age
+- [ ] Color based on attractor proximity (Red/Green split)
+- [ ] Alpha fading based on age/velocity
 
-## VI. Refinement and Optimization
+---
 
--   [ ] Fine-tune particle aesthetics (lifespan, speed, size variations, alpha fades).
--   [ ] Adjust force parameters (attractor strength, noise influence) for the desired visual flow.
--   [ ] Optimize shader performance.
--   [ ] Optimize particle count vs. browser performance.
--   [ ] Debug synchronization issues between windows.
--   [ ] Code cleanup, commenting, and documentation.
+## III. Multi-Window System (NOT STARTED - CORE FEATURE)
+
+This is the defining feature of "Entangled" - particles in separate browser windows interact based on screen coordinates.
+
+### WindowManager Class
+- [ ] Create `static/js/WindowManager.js` class
+- [ ] Generate unique ID for each window instance
+- [ ] Poll window properties every frame:
+  - `window.screenX`, `window.screenY`
+  - `window.innerWidth`, `window.innerHeight`
+- [ ] Write window metadata to localStorage
+- [ ] Read all window metadata from localStorage
+- [ ] Detect and clean up stale/closed windows (timeout-based)
+- [ ] Expose list of all active windows with their screen positions
+
+### localStorage Synchronization
+- [ ] Define localStorage key schema for window data
+- [ ] Implement `storage` event listener for cross-window updates
+- [ ] Handle race conditions and initial load states
+- [ ] Implement window registration on page load
+- [ ] Implement window deregistration on `beforeunload`
+
+### Global Coordinate System
+- [ ] Map screen-space coordinates to Three.js world-space
+- [ ] Offset camera position based on window.screenX/screenY:
+  ```javascript
+  camera.position.x = window.screenX + window.innerWidth / 2;
+  camera.position.y = window.screenY + window.innerHeight / 2;
+  ```
+- [ ] Define "World Space" spanning the entire monitor
+- [ ] Ensure particles at World Position (X, Y) render correctly across windows
+- [ ] Adjust camera frustum dynamically for window size
+
+### Cross-Window Particle Interaction
+- [ ] Pass other window positions as uniforms to velocity shader
+- [ ] Implement attraction/repulsion forces towards other window centers
+- [ ] Particles "reach out" towards particles in other windows
+- [ ] Force strength based on distance between window centers
+
+---
+
+## IV. Visual Tendrils (NOT STARTED)
+
+The visual connections between particle clouds in different windows.
+
+- [ ] Design tendril rendering approach:
+  - Option A: Dedicated particle stream between windows
+  - Option B: `THREE.LineSegments` between window centers
+  - Option C: `THREE.TubeGeometry` with animated path
+- [ ] Implement tendril geometry creation
+- [ ] Animate tendrils based on window positions
+- [ ] Color tendrils based on connection strength
+- [ ] Tendrils should form "elastic bonds" regardless of window distance
+
+---
+
+## V. Visual Polish (NOT STARTED)
+
+### Particle Coloring
+- [ ] Red/Green color split based on attractor proximity
+- [ ] Color gradient based on velocity magnitude
+- [ ] Color based on particle age
+
+### Particle Rendering
+- [ ] Alpha fading based on age
+- [ ] Alpha fading based on velocity (faster = more visible?)
+- [ ] Dynamic point size based on velocity
+- [ ] Point size variation based on depth/distance
+
+### Aesthetic Refinements
+- [ ] Fine-tune particle aesthetics (lifespan, speed, size)
+- [ ] Adjust force parameters for organic flow
+- [ ] Match "Entangled" visual style (fungal gill structures, organic patterns)
+
+---
+
+## VI. Backend Integration (PARTIAL)
+
+- [x] Server stores simulation parameters
+- [x] Server broadcasts parameters on client connect
+- [x] Server receives parameter update requests
+- [x] Server broadcasts updated parameters to all clients
+- [ ] Client applies received parameters to shader uniforms (TODO in code)
+- [ ] HTML UI controls for parameter adjustment
+- [ ] Real-time parameter tweaking from UI
+
+---
+
+## VII. Optimization & Cleanup (NOT STARTED)
+
+- [ ] Optimize shader performance
+- [ ] Profile and optimize particle count vs. browser performance
+- [ ] Debug any synchronization issues between windows
+- [ ] Code cleanup and documentation
+- [ ] Remove development console.log statements
+- [ ] Test across browsers (Chrome, Firefox, Edge)
+
+---
+
+## Implementation Priority Order
+
+1. **WindowManager.js** - Foundation for multi-window
+2. **localStorage synchronization** - Cross-window communication
+3. **Global coordinate system** - Screen-to-world mapping
+4. **Cross-window particle interaction** - Physics responding to other windows
+5. **Visual tendrils** - Visible connections between windows
+6. **Visual polish** - Colors, alpha, sizing
+7. **Optimization** - Performance and cleanup
+
+---
+
+## Reference: Entangled Architecture
+
+From Bjørn Staal's `multipleWindow3dScene`:
+
+```
+WindowManager.js
+├── Unique window ID generation
+├── localStorage window metadata storage
+├── Stale window detection and cleanup
+└── Active window list management
+
+main.js
+├── Three.js scene initialization
+├── Read all window positions from localStorage
+├── Convert screen coords to world coords
+├── Camera offset based on window.screenX/Y
+└── Render particles in global coordinate space
+
+Coordinate Mapping:
+- Window at (0,0) with size 500x500
+- Window at (500,0) with size 500x500
+- Particle at World(250, 250) appears:
+  - Right edge of Window A
+  - Left edge of Window B
+```
