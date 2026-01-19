@@ -12,32 +12,6 @@ Tangled is a recreation of Bjørn Staal's "Entangled" project - a generative art
 - Graphics: WebGL with custom GLSL shaders for GPU particle physics
 - Synchronization: localStorage for cross-window state sharing (primary), Socket.IO for server parameters
 
-## Target: Entangled Behavior
-
-The core innovation is **inter-window communication**: particles from one window "reach out" to particles in another window using visual tendrils, forming elastic bonds. Moving or resizing windows alters the physics and visual outcomes.
-
-### Key Components to Implement
-
-1. **WindowManager**: Assigns unique ID per window, polls `screenX`/`screenY`/`innerWidth`/`innerHeight` to localStorage, detects stale/closed windows
-
-2. **Global Coordinate System**: Map screen-space to 3D world-space so objects appear static relative to the monitor while windows move:
-   ```javascript
-   // Window writes its metadata to localStorage
-   const windowInfo = {
-       id: windowId,
-       shape: { x: window.screenX, y: window.screenY, w: window.innerWidth, h: window.innerHeight },
-       updated: Date.now()
-   };
-
-   // Camera offset based on screen position
-   camera.position.x = window.screenX + window.innerWidth / 2;
-   camera.position.y = window.screenY + window.innerHeight / 2;
-   ```
-
-3. **Cross-Window Particle Interaction**: Read all active window positions from localStorage, particles in one window respond to particles/attractors in other windows
-
-4. **Visual Tendrils**: Draw connections between particle clouds in different windows (dedicated particle streams, LineSegments, or TubeGeometry)
-
 ## Development Commands
 
 ```bash
@@ -46,76 +20,90 @@ pip install -r requirements.txt
 
 # Run development server (serves at http://localhost:5000)
 python app.py
+
+# API endpoints for debugging
+# http://localhost:5000/api/status  - Server status and metrics
+# http://localhost:5000/api/clients - Connected clients info
 ```
 
 No frontend build step - static files are served directly by Flask.
 
 ## Architecture
 
+### Multi-Window Coordination
+
+The core innovation is **inter-window communication** via localStorage:
+
+1. **WindowManager** (`static/js/WindowManager.js`): Each window polls `screenX`/`screenY`/`innerWidth`/`innerHeight` to localStorage, detecting other windows and stale/closed windows (2s timeout)
+
+2. **Global Coordinate System**: Screen-space maps to world-space so particles appear static relative to the monitor:
+   ```javascript
+   camera.position.x = window.screenX + window.innerWidth / 2;
+   camera.position.y = -(window.screenY + window.innerHeight / 2); // Y inverted
+   ```
+
+3. **Cross-Window Rendering**: Ghost clouds render simplified representations of other windows' particle clouds; tendrils connect clouds between windows
+
 ### GPGPU Particle Pipeline
 
-The core visualization uses a ping-pong texture technique for GPU-based particle simulation:
+Uses ping-pong texture technique for GPU-based simulation (65,536 particles in a 256×256 texture):
 
-1. **Velocity Update** (`static/shaders/gpgpu_velocity.frag`): Computes forces (attractor, noise, damping) and updates particle velocities
-2. **Position Update** (`static/shaders/gpgpu_position.frag`): Integrates velocity to update positions, handles respawn logic
-3. **Render Pass** (`static/shaders/particle_render.vert/frag`): Draws particles using computed positions with additive blending
+1. **Velocity Update**: Forces (attractor, curl noise, breathing, heartbeat, membrane ripple, internal currents, micro-movements, cross-window attraction)
+2. **Position Update**: Velocity integration, boundary checks, respawn within layer shells
+3. **Render Pass**: Layer-specific colors/sizes, rim lighting, subsurface scattering, soft gaussian falloff
 
-### Key Components
+### Six-Layer Particle System
 
-- `app.py` - Flask server managing Socket.IO connections and simulation parameter broadcasting
-- `static/js/main.js` - Main application: Three.js scene setup, GPGPU initialization, animation loop
-- `static/shaders/` - GLSL shaders for particle physics and rendering
-- `static/js/vendor/` - Three.js library and extensions (OrbitControls, GPUComputationRenderer)
+Particles are organized in concentric layers with distinct behaviors:
+- **Nucleus** (0-6): Stiff, warm amber core
+- **Inner Plasma** (7.5-14): Fluid, coral/peach
+- **Cytoplasm** (15-24): Fluid with slow orbit, greenish-white
+- **Membrane** (25.5-35): Fluid, blue-green bioluminescent
+- **Outer Membrane** (37-48): Orbiting, silver-lavender
+- **Halo** (51-65): Stiff, ghostly outer aura
+
+### Key Files
+
+- `app.py` - Flask server with Socket.IO, connection tracking, verbose logging
+- `static/js/main.js` - Main application: GPGPU setup, all shaders inline, animation loop, tendril/dust/ghost systems
+- `static/js/WindowManager.js` - localStorage-based multi-window detection
+- `templates/index.html` - Entry point with Three.js imports
 
 ### Data Flow
 
 ```
-Server (app.py) --[Socket.IO]--> Client (main.js)
-                                    |
-                                    v
-                            Update shader uniforms
-                                    |
-                                    v
-                            GPGPU compute pass
-                                    |
-                                    v
-                            Render particles
+localStorage <---> WindowManager <---> main.js (particle positions, window shapes)
+Server (app.py) --[Socket.IO]--> Clients (parameter sync, entanglement events)
 ```
-
-## Current Implementation Status
-
-**Completed:**
-- Flask/SocketIO server with parameter broadcasting
-- Basic Three.js scene with GPGPU particle system (ping-pong textures)
-- Velocity shader: attractor forces, simplex noise, damping, orbit/repulsion effects
-- Position shader: velocity integration, boundary checks, respawn
-- Particle rendering with additive blending
-- OrbitControls for camera navigation
-
-**Not Yet Implemented:**
-- WindowManager class for multi-window coordination
-- localStorage-based cross-window synchronization
-- Global coordinate system (screen-space to world-space mapping)
-- Cross-window particle interaction (particles responding to other windows)
-- Visual tendrils connecting particle clouds between windows
-- Red/Green coloring based on attractor proximity
-- Particle alpha fading based on age/velocity
 
 ## Working with Shaders
 
-GLSL shaders are critical for the visual style. When modifying:
+All GLSL shaders are defined inline in `main.js` as template literals. Key shader sections:
 
-- **Velocity shader** (`gpgpu_velocity.frag`): Attractor forces, curl noise, damping, orbit effects
-- **Position shader** (`gpgpu_position.frag`): Velocity integration, boundary checks, respawn mechanics
-- **Render shaders** (`particle_render.vert/frag`): Size, color based on attractor proximity, alpha
+- **Velocity shader** (~lines 130-950): All force calculations including curl noise, breathing, heartbeat pulse, membrane ripple, internal currents, cross-window forces
+- **Position shader** (~lines 960-1040): Velocity integration, layer-based respawn
+- **Particle render shader** (~lines 1045-1270): Layer colors, lighting, soft gaussian falloff
+- **Tendril shader** (~lines 2415-2685): Helical waves, energy pulses, bioluminescent colors
+- **Dust shader** (~lines 2730-2840): Atmospheric particles
+- **Film post-processing** (~lines 1270-1350): Vignette, chromatic aberration, film grain
 
-Prefer mathematical operations over conditional logic (`if` statements) - use smooth interpolation and vector math for more organic behavior.
+**Shader guidelines:**
+- Prefer mathematical operations over conditionals - use `smoothstep`, `mix`, `exp` for organic behavior
+- Unroll loops for GPU performance (see heartbeat pulse implementation)
+- Use pre-computed constants where possible (e.g., `invEps2 = 1.0 / (2.0 * eps)`)
 
-## AI Assistant Guidelines (from project rules)
+## Cross-Window Tendrils
 
-- **Be Iterative**: Generate code sequentially (e.g., "Set up structure first," then "Initialize particle system," then "Implement force in shader")
-- **Be Specific**: Instead of "It doesn't look right," say "The particles aren't swirling - add curl noise to the update shader"
-- **Provide Context**: Reference specific files and code blocks when asking for modifications
-- **Debug Systematically**: Step through issues ("Check if attractor uniform is passed correctly," "Draw attractor positions for debugging")
-- **Preserve Existing Code**: Don't remove unrelated code or functionalities
-- **Single Chunk Edits**: Provide all edits in one consolidated update
+Tendrils connect particle clouds between windows:
+- Coordinates are in screen-space pixels (100-3000+ range)
+- Distance fade must account for large pixel distances: `smoothstep(2500.0, 150.0, distance)`
+- Y coordinate is inverted: `worldY = -win.center.y`
+- Use `depthTest: false` and `renderOrder: 100` to ensure visibility
+
+## AI Assistant Guidelines
+
+- **Be Iterative**: Generate code sequentially - structure first, then particle system, then shader forces
+- **Be Specific**: Reference exact line numbers and shader sections when discussing changes
+- **Preserve Existing Code**: The shader code is complex and interdependent - don't remove unrelated sections
+- **Debug Systematically**: Add console.log statements sparingly; check uniform values, connection states
+- **Test Multi-Window**: Always test with 2+ browser windows to verify cross-window features

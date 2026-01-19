@@ -18,6 +18,8 @@ export class WindowManager {
         this.winShapeChangeCallback = null;
         this.lastShape = { x: 0, y: 0, w: 0, h: 0 };
         this.initialized = false;
+        this.isParent = false;  // True if this is the first/parent window
+        this.createdAt = null;  // Timestamp when this window was created
     }
 
     /**
@@ -26,6 +28,30 @@ export class WindowManager {
      */
     init(metaData = {}) {
         this.metaData = metaData;
+        this.createdAt = Date.now();
+
+        // FIRST: Clean up stale windows before checking parent/child status
+        // This prevents false positives from previous sessions
+        let existingWindows = this._loadWindows();
+        const now = Date.now();
+        let cleaned = false;
+        
+        for (const id in existingWindows) {
+            if (now - existingWindows[id].updated > WindowManager.STALE_TIMEOUT) {
+                console.log(`Cleaning stale window at init: ${id}`);
+                delete existingWindows[id];
+                cleaned = true;
+            }
+        }
+        
+        if (cleaned) {
+            this._saveWindows(existingWindows);
+        }
+        
+        const existingCount = Object.keys(existingWindows).length;
+
+        // First window becomes the parent (after stale cleanup)
+        this.isParent = existingCount === 0;
 
         // Generate unique window ID using a counter in localStorage
         this.id = this._getNextId();
@@ -43,7 +69,7 @@ export class WindowManager {
         window.addEventListener('beforeunload', this._onBeforeUnload.bind(this));
 
         this.initialized = true;
-        console.log(`WindowManager initialized with ID: ${this.id}`);
+        console.log(`WindowManager initialized with ID: ${this.id} (${this.isParent ? 'PARENT' : 'CHILD'})`);
 
         return this.id;
     }
@@ -153,12 +179,57 @@ export class WindowManager {
             shape: this.lastShape,
             center: this._getWindowCenter(this.lastShape),
             metaData: this.metaData,
-            updated: Date.now()
+            updated: Date.now(),
+            createdAt: this.createdAt,
+            isParent: this.isParent
         };
 
         windows[this.id] = windowInfo;
         this.windows = windows;
         this._saveWindows(windows);
+    }
+
+    /**
+     * Check if this window is the parent (first) window
+     * @returns {boolean}
+     */
+    isParentWindow() {
+        return this.isParent;
+    }
+
+    /**
+     * Get the parent window info (the first/oldest window)
+     * @returns {Object|null} Parent window info or null if this is the parent
+     */
+    getParentWindow() {
+        if (this.isParent) {
+            return this.getThisWindow();
+        }
+
+        // Find the oldest window (parent)
+        let parentWindow = null;
+        let oldestTime = Infinity;
+
+        for (const id in this.windows) {
+            const win = this.windows[id];
+            if (win.createdAt && win.createdAt < oldestTime) {
+                oldestTime = win.createdAt;
+                parentWindow = win;
+            }
+        }
+
+        return parentWindow;
+    }
+
+    /**
+     * Get child windows (all windows except the parent)
+     * @returns {Array} Array of child window info objects
+     */
+    getChildWindows() {
+        const parentWindow = this.getParentWindow();
+        if (!parentWindow) return [];
+
+        return Object.values(this.windows).filter(w => w.id !== parentWindow.id);
     }
 
     _updateWindowInStorage() {
