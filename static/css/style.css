@@ -1,0 +1,10 @@
+body {
+    margin: 0;
+    overflow: hidden; /* Prevent scrollbars */
+}
+
+canvas {
+    display: block; /* Remove extra space below canvas */
+    width: 100%;
+    height: 100%;
+} 

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tangled Web</title>
+    <link rel="stylesheet" href="static/css/style.css">
+    <!-- Inline SVG favicon to prevent 404 -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%23333'/><circle cx='50' cy='50' r='25' fill='%23666'/><circle cx='50' cy='50' r='12' fill='%23fff'/></svg>">
+</head>
+<body>
+    <canvas id="webgl-canvas"></canvas>
+
+    <!-- Socket.IO Client Library (from CDN) -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+    <!-- Three.js (served locally) -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "./static/js/vendor/three.module.js",
+                "three/addons/": "./static/js/vendor/"
+            }
+        }
+    </script>
+
+    <!-- Your main script -->
+    <script type="module" src="static/js/main.js?v=23"></script>
+</body>
+</html>
