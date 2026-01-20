@@ -1,14 +1,25 @@
 /**
  * WindowManager - Manages multi-window coordination for Tangled
  *
- * Uses localStorage to share window positions and detect other browser windows.
- * Each window polls its screen position and shares it with other windows.
+ * Uses BroadcastChannel for instant cross-window messaging (primary)
+ * with localStorage as fallback for browsers without BroadcastChannel support.
+ * Each window shares its screen position and receives updates instantly.
  */
 
 export class WindowManager {
     static STORAGE_KEY = 'tangled_windows';
     static STALE_TIMEOUT = 2000; // ms - windows not updated within this time are considered closed
     static COUNTER_KEY = 'tangled_window_counter';
+    static CHANNEL_NAME = 'tangled_window_channel';  // BroadcastChannel name
+
+    // Message types for BroadcastChannel
+    static MSG_REGISTER = 'register';      // New window joining
+    static MSG_UPDATE = 'update';          // Window position/shape update
+    static MSG_UNREGISTER = 'unregister';  // Window closing
+    static MSG_HEARTBEAT = 'heartbeat';    // Keep-alive ping
+    static MSG_SYNC_REQUEST = 'sync_request';   // Request full sync from all windows
+    static MSG_SYNC_RESPONSE = 'sync_response'; // Response with window data
+    static MSG_CUSTOM = 'custom';          // Custom application messages
 
     constructor() {
         this.id = null;
@@ -16,10 +27,17 @@ export class WindowManager {
         this.windows = {};
         this.winChangeCallback = null;
         this.winShapeChangeCallback = null;
+        this.customMessageCallback = null;  // NEW: callback for custom messages
         this.lastShape = { x: 0, y: 0, w: 0, h: 0 };
         this.initialized = false;
         this.isParent = false;  // True if this is the first/parent window
         this.createdAt = null;  // Timestamp when this window was created
+        
+        // BroadcastChannel support
+        this.channel = null;
+        this.useBroadcastChannel = typeof BroadcastChannel !== 'undefined';
+        this.heartbeatInterval = null;
+        this.lastHeartbeatTimes = {};  // Track last heartbeat from each window
     }
 
     /**
@@ -59,19 +77,267 @@ export class WindowManager {
         // Get current window shape
         this.lastShape = this._getWindowShape();
 
+        // === INITIALIZE BROADCAST CHANNEL ===
+        if (this.useBroadcastChannel) {
+            this._initBroadcastChannel();
+        }
+
         // Register this window
         this._registerWindow();
 
-        // Listen for storage events from other windows
+        // Listen for storage events from other windows (fallback/backup)
         window.addEventListener('storage', this._onStorageChange.bind(this));
 
         // Clean up on window close
         window.addEventListener('beforeunload', this._onBeforeUnload.bind(this));
 
+        // Start heartbeat for liveness detection
+        this._startHeartbeat();
+
         this.initialized = true;
-        console.log(`WindowManager initialized with ID: ${this.id} (${this.isParent ? 'PARENT' : 'CHILD'})`);
+        const commMode = this.useBroadcastChannel ? 'BroadcastChannel' : 'localStorage';
+        console.log(`WindowManager initialized with ID: ${this.id} (${this.isParent ? 'PARENT' : 'CHILD'}) [${commMode}]`);
+
+        // Request sync from other windows
+        if (this.useBroadcastChannel) {
+            this._broadcast(WindowManager.MSG_SYNC_REQUEST, { requesterId: this.id });
+        }
 
         return this.id;
+    }
+
+    /**
+     * Initialize BroadcastChannel for instant cross-window messaging
+     */
+    _initBroadcastChannel() {
+        try {
+            this.channel = new BroadcastChannel(WindowManager.CHANNEL_NAME);
+            this.channel.onmessage = this._onBroadcastMessage.bind(this);
+            this.channel.onmessageerror = (e) => {
+                console.warn('BroadcastChannel message error:', e);
+            };
+            console.log('BroadcastChannel initialized');
+        } catch (e) {
+            console.warn('Failed to initialize BroadcastChannel, falling back to localStorage:', e);
+            this.useBroadcastChannel = false;
+            this.channel = null;
+        }
+    }
+
+    /**
+     * Handle incoming BroadcastChannel messages
+     */
+    _onBroadcastMessage(event) {
+        const { type, data, senderId } = event.data;
+        
+        // Ignore our own messages
+        if (senderId === this.id) return;
+        
+        switch (type) {
+            case WindowManager.MSG_REGISTER:
+                // New window joined - add to our local cache
+                this._handleWindowRegister(data);
+                break;
+                
+            case WindowManager.MSG_UPDATE:
+                // Window position update - instant update
+                this._handleWindowUpdate(data);
+                break;
+                
+            case WindowManager.MSG_UNREGISTER:
+                // Window closing - remove from cache
+                this._handleWindowUnregister(data);
+                break;
+                
+            case WindowManager.MSG_HEARTBEAT:
+                // Update last heartbeat time for this window
+                this.lastHeartbeatTimes[senderId] = Date.now();
+                break;
+                
+            case WindowManager.MSG_SYNC_REQUEST:
+                // Another window is requesting sync - send our info
+                this._broadcast(WindowManager.MSG_SYNC_RESPONSE, this._getWindowInfo());
+                break;
+                
+            case WindowManager.MSG_SYNC_RESPONSE:
+                // Received sync data from another window
+                this._handleWindowUpdate(data);
+                break;
+                
+            case WindowManager.MSG_CUSTOM:
+                // Custom application message
+                if (this.customMessageCallback) {
+                    this.customMessageCallback(data, senderId);
+                }
+                break;
+        }
+    }
+
+    /**
+     * Broadcast a message to all other windows
+     */
+    _broadcast(type, data) {
+        if (!this.channel) return;
+        
+        try {
+            this.channel.postMessage({
+                type,
+                data,
+                senderId: this.id,
+                timestamp: Date.now()
+            });
+        } catch (e) {
+            console.warn('Failed to broadcast message:', e);
+        }
+    }
+
+    /**
+     * Send a custom message to all other windows
+     * @param {Object} data - Custom data to send
+     */
+    sendMessage(data) {
+        if (this.useBroadcastChannel) {
+            this._broadcast(WindowManager.MSG_CUSTOM, data);
+        }
+        // Could also store in localStorage for fallback
+    }
+
+    /**
+     * Set callback for custom messages from other windows
+     * @param {Function} callback - Called with (data, senderId)
+     */
+    setCustomMessageCallback(callback) {
+        this.customMessageCallback = callback;
+    }
+
+    /**
+     * Handle a window registration message
+     */
+    _handleWindowRegister(windowInfo) {
+        const windowId = windowInfo.id;
+        const wasEmpty = Object.keys(this.windows).filter(id => String(id) !== String(this.id)).length === 0;
+        
+        this.windows[windowId] = windowInfo;
+        this.lastHeartbeatTimes[windowId] = Date.now();
+        
+        // Also update localStorage for persistence
+        this._updateLocalStorage();
+        
+        // Notify callback if this is a new window
+        if (wasEmpty || !this.windows[windowId]) {
+            this._notifyWindowChange();
+        }
+    }
+
+    /**
+     * Handle a window update message
+     */
+    _handleWindowUpdate(windowInfo) {
+        const windowId = windowInfo.id;
+        const oldWindow = this.windows[windowId];
+        
+        this.windows[windowId] = windowInfo;
+        this.lastHeartbeatTimes[windowId] = Date.now();
+        
+        // Check if position changed significantly
+        if (oldWindow) {
+            const dx = Math.abs((oldWindow.center?.x || 0) - (windowInfo.center?.x || 0));
+            const dy = Math.abs((oldWindow.center?.y || 0) - (windowInfo.center?.y || 0));
+            
+            if (dx > 2 || dy > 2) {
+                this._notifyWindowChange();
+            }
+        } else {
+            this._notifyWindowChange();
+        }
+        
+        // Update localStorage periodically (not every message)
+        this._updateLocalStorage();
+    }
+
+    /**
+     * Handle a window unregister message
+     */
+    _handleWindowUnregister(data) {
+        const windowId = data.id;
+        if (this.windows[windowId]) {
+            delete this.windows[windowId];
+            delete this.lastHeartbeatTimes[windowId];
+            this._updateLocalStorage();
+            this._notifyWindowChange();
+        }
+    }
+
+    /**
+     * Start heartbeat interval for liveness detection
+     */
+    _startHeartbeat() {
+        // Send heartbeat every 500ms
+        this.heartbeatInterval = setInterval(() => {
+            if (this.useBroadcastChannel) {
+                this._broadcast(WindowManager.MSG_HEARTBEAT, { id: this.id });
+            }
+            
+            // Check for stale windows (no heartbeat in STALE_TIMEOUT)
+            this._checkStaleWindows();
+        }, 500);
+    }
+
+    /**
+     * Check for and remove stale windows
+     */
+    _checkStaleWindows() {
+        const now = Date.now();
+        let changed = false;
+        
+        for (const windowId in this.windows) {
+            if (String(windowId) === String(this.id)) continue;
+            
+            const lastHeartbeat = this.lastHeartbeatTimes[windowId] || 0;
+            if (now - lastHeartbeat > WindowManager.STALE_TIMEOUT) {
+                console.log(`Removing stale window (no heartbeat): ${windowId}`);
+                delete this.windows[windowId];
+                delete this.lastHeartbeatTimes[windowId];
+                changed = true;
+            }
+        }
+        
+        if (changed) {
+            this._updateLocalStorage();
+            this._notifyWindowChange();
+        }
+    }
+
+    /**
+     * Notify the window change callback
+     */
+    _notifyWindowChange() {
+        if (this.winChangeCallback) {
+            const otherWindows = this.getOtherWindows();
+            this.winChangeCallback(otherWindows);
+        }
+    }
+
+    /**
+     * Update localStorage with current window state
+     */
+    _updateLocalStorage() {
+        this._saveWindows(this.windows);
+    }
+
+    /**
+     * Get this window's info object
+     */
+    _getWindowInfo() {
+        return {
+            id: this.id,
+            shape: this.lastShape,
+            center: this._getWindowCenter(this.lastShape),
+            metaData: this.metaData,
+            updated: Date.now(),
+            createdAt: this.createdAt,
+            isParent: this.isParent
+        };
     }
 
     /**
@@ -92,6 +358,16 @@ export class WindowManager {
 
         if (shapeChanged) {
             this.lastShape = currentShape;
+            
+            // Update our local cache
+            this.windows[this.id] = this._getWindowInfo();
+            
+            // Broadcast instant update via BroadcastChannel
+            if (this.useBroadcastChannel) {
+                this._broadcast(WindowManager.MSG_UPDATE, this._getWindowInfo());
+            }
+            
+            // Also update localStorage (for persistence/fallback)
             this._updateWindowInStorage();
 
             if (this.winShapeChangeCallback) {
@@ -102,8 +378,10 @@ export class WindowManager {
             this._updateWindowInStorage();
         }
 
-        // Clean up stale windows and check for changes
-        this._cleanupAndNotify();
+        // Clean up stale windows and check for changes (localStorage fallback)
+        if (!this.useBroadcastChannel) {
+            this._cleanupAndNotify();
+        }
     }
 
     /**
@@ -173,20 +451,16 @@ export class WindowManager {
 
     _registerWindow() {
         const windows = this._loadWindows();
-
-        const windowInfo = {
-            id: this.id,
-            shape: this.lastShape,
-            center: this._getWindowCenter(this.lastShape),
-            metaData: this.metaData,
-            updated: Date.now(),
-            createdAt: this.createdAt,
-            isParent: this.isParent
-        };
+        const windowInfo = this._getWindowInfo();
 
         windows[this.id] = windowInfo;
         this.windows = windows;
         this._saveWindows(windows);
+        
+        // Broadcast registration via BroadcastChannel
+        if (this.useBroadcastChannel) {
+            this._broadcast(WindowManager.MSG_REGISTER, windowInfo);
+        }
     }
 
     /**
@@ -330,6 +604,32 @@ export class WindowManager {
     }
 
     _onBeforeUnload() {
+        // Broadcast unregister message for instant notification
+        if (this.useBroadcastChannel) {
+            this._broadcast(WindowManager.MSG_UNREGISTER, { id: this.id });
+        }
+        
+        // Stop heartbeat
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+        }
+        
+        // Close BroadcastChannel
+        if (this.channel) {
+            this.channel.close();
+        }
+        
+        // Remove from localStorage
         this._removeWindow();
+    }
+    
+    /**
+     * Clean up and destroy the WindowManager
+     */
+    destroy() {
+        this._onBeforeUnload();
+        window.removeEventListener('storage', this._onStorageChange.bind(this));
+        window.removeEventListener('beforeunload', this._onBeforeUnload.bind(this));
+        this.initialized = false;
     }
 }

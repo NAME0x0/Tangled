@@ -2,9 +2,26 @@
 
 Recreation of Bjørn Staal's "Entangled" project - a generative art piece where GPU-accelerated particle simulations in separate browser windows detect and interact with one another based on their relative screen coordinates.
 
-## Project Status: ~45% Complete
+## Project Status: ~55% Complete
 
-The single-window GPGPU particle system is fully functional. The entire multi-window coordination layer (the core "Entangled" feature) is not yet implemented.
+The single-window GPGPU particle system is fully functional with advanced physics. Multi-window coordination with tendrils, ghost clouds, and entanglement animation is implemented.
+
+---
+
+## COMPLETED RECENT WORK
+
+### Animation Core Systems (NEW)
+- [x] Spring physics class with damping and stiffness (AnimationCore.js)
+- [x] Comprehensive easing library (cubic-bezier, elastic, bounce, spring)
+- [x] Anticipation and follow-through animation system
+- [x] Global breathing rhythm (60/120 BPM synchronized)
+- [x] Per-particle stagger system based on distance
+- [x] Spring-based camera zoom for organic feel
+- [x] Spring-based camera position following
+
+### Enhanced Physics Engine (NEW)
+- [x] Vortex confinement for turbulence enhancement
+- [x] Delta time passed to shader for physics consistency
 
 ---
 

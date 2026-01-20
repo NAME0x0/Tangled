@@ -9,6 +9,818 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
+// Animation Core - Spring physics, easing, breathing rhythm, stagger
+import { 
+    AnimationManager, 
+    Spring, 
+    Spring3D, 
+    Easing, 
+    BreathingRhythm,
+    StaggerSystem,
+    AnimationGLSL 
+} from './AnimationCore.js';
+
+// =============================================================================
+// === CODE ARCHITECTURE SYSTEMS ===
+// =============================================================================
+
+/**
+ * EventEmitter - Lightweight pub/sub event system for loose coupling
+ * Enables components to communicate without direct references
+ */
+class EventEmitter {
+    constructor() {
+        this._events = new Map();
+        this._onceListeners = new Map();
+    }
+    
+    /**
+     * Subscribe to an event
+     * @param {string} event - Event name
+     * @param {Function} listener - Callback function
+     * @returns {Function} Unsubscribe function
+     */
+    on(event, listener) {
+        if (!this._events.has(event)) {
+            this._events.set(event, new Set());
+        }
+        this._events.get(event).add(listener);
+        
+        // Return unsubscribe function
+        return () => this.off(event, listener);
+    }
+    
+    /**
+     * Subscribe to an event (one time only)
+     * @param {string} event - Event name
+     * @param {Function} listener - Callback function
+     */
+    once(event, listener) {
+        if (!this._onceListeners.has(event)) {
+            this._onceListeners.set(event, new Set());
+        }
+        this._onceListeners.get(event).add(listener);
+    }
+    
+    /**
+     * Unsubscribe from an event
+     * @param {string} event - Event name
+     * @param {Function} listener - Callback function
+     */
+    off(event, listener) {
+        if (this._events.has(event)) {
+            this._events.get(event).delete(listener);
+        }
+        if (this._onceListeners.has(event)) {
+            this._onceListeners.get(event).delete(listener);
+        }
+    }
+    
+    /**
+     * Emit an event with data
+     * @param {string} event - Event name
+     * @param {*} data - Event data
+     */
+    emit(event, data) {
+        // Call regular listeners
+        if (this._events.has(event)) {
+            for (const listener of this._events.get(event)) {
+                listener(data);
+            }
+        }
+        
+        // Call once listeners and remove them
+        if (this._onceListeners.has(event)) {
+            for (const listener of this._onceListeners.get(event)) {
+                listener(data);
+            }
+            this._onceListeners.delete(event);
+        }
+    }
+    
+    /**
+     * Remove all listeners for an event (or all events)
+     * @param {string} [event] - Event name (optional)
+     */
+    removeAllListeners(event) {
+        if (event) {
+            this._events.delete(event);
+            this._onceListeners.delete(event);
+        } else {
+            this._events.clear();
+            this._onceListeners.clear();
+        }
+    }
+    
+    /**
+     * Get listener count for an event
+     * @param {string} event 
+     * @returns {number}
+     */
+    listenerCount(event) {
+        let count = 0;
+        if (this._events.has(event)) count += this._events.get(event).size;
+        if (this._onceListeners.has(event)) count += this._onceListeners.get(event).size;
+        return count;
+    }
+}
+
+// Global event bus for application-wide events
+const eventBus = new EventEmitter();
+
+// Standard event types for consistency
+const Events = {
+    // Window events
+    WINDOW_MOVED: 'window:moved',
+    WINDOW_RESIZED: 'window:resized',
+    WINDOW_ADDED: 'window:added',
+    WINDOW_REMOVED: 'window:removed',
+    
+    // Particle system events
+    PARTICLE_SYSTEM_READY: 'particles:ready',
+    PARTICLE_COUNT_CHANGED: 'particles:countChanged',
+    PARTICLE_QUALITY_CHANGED: 'particles:qualityChanged',
+    
+    // Animation events
+    ANIMATION_STARTED: 'animation:started',
+    ANIMATION_COMPLETED: 'animation:completed',
+    BREATHING_CYCLE: 'animation:breathingCycle',
+    
+    // Entanglement events
+    ENTANGLEMENT_STARTED: 'entanglement:started',
+    ENTANGLEMENT_COMPLETED: 'entanglement:completed',
+    ENTANGLEMENT_PROGRESS: 'entanglement:progress',
+    
+    // Rendering events
+    FRAME_START: 'render:frameStart',
+    FRAME_END: 'render:frameEnd',
+    LOD_CHANGED: 'render:lodChanged',
+    
+    // Performance events
+    FPS_UPDATE: 'performance:fpsUpdate',
+    QUALITY_ADJUSTED: 'performance:qualityAdjusted'
+};
+
+/**
+ * Component - Base class for entity components
+ * Components hold data and can be attached to entities
+ */
+class Component {
+    constructor(type) {
+        this.type = type;
+        this.entity = null;
+        this.enabled = true;
+    }
+    
+    /**
+     * Called when component is added to an entity
+     * @param {Entity} entity 
+     */
+    onAttach(entity) {
+        this.entity = entity;
+    }
+    
+    /**
+     * Called when component is removed from an entity
+     */
+    onDetach() {
+        this.entity = null;
+    }
+    
+    /**
+     * Update component (override in subclasses)
+     * @param {number} deltaTime 
+     */
+    update(deltaTime) {
+        // Override in subclasses
+    }
+}
+
+/**
+ * Entity - Container for components
+ * Entities are game objects that can have multiple components attached
+ */
+class Entity {
+    static _nextId = 0;
+    
+    constructor(name = '') {
+        this.id = Entity._nextId++;
+        this.name = name || `Entity_${this.id}`;
+        this.components = new Map();
+        this.tags = new Set();
+        this.enabled = true;
+        this.children = [];
+        this.parent = null;
+    }
+    
+    /**
+     * Add a component to this entity
+     * @param {Component} component 
+     * @returns {Entity} this (for chaining)
+     */
+    addComponent(component) {
+        if (this.components.has(component.type)) {
+            console.warn(`Entity ${this.name} already has component of type ${component.type}`);
+            return this;
+        }
+        this.components.set(component.type, component);
+        component.onAttach(this);
+        return this;
+    }
+    
+    /**
+     * Get a component by type
+     * @param {string} type 
+     * @returns {Component|undefined}
+     */
+    getComponent(type) {
+        return this.components.get(type);
+    }
+    
+    /**
+     * Check if entity has a component
+     * @param {string} type 
+     * @returns {boolean}
+     */
+    hasComponent(type) {
+        return this.components.has(type);
+    }
+    
+    /**
+     * Remove a component by type
+     * @param {string} type 
+     * @returns {Component|undefined}
+     */
+    removeComponent(type) {
+        const component = this.components.get(type);
+        if (component) {
+            component.onDetach();
+            this.components.delete(type);
+        }
+        return component;
+    }
+    
+    /**
+     * Add a tag to this entity
+     * @param {string} tag 
+     */
+    addTag(tag) {
+        this.tags.add(tag);
+    }
+    
+    /**
+     * Check if entity has a tag
+     * @param {string} tag 
+     * @returns {boolean}
+     */
+    hasTag(tag) {
+        return this.tags.has(tag);
+    }
+    
+    /**
+     * Add a child entity
+     * @param {Entity} child 
+     */
+    addChild(child) {
+        if (child.parent) {
+            child.parent.removeChild(child);
+        }
+        child.parent = this;
+        this.children.push(child);
+    }
+    
+    /**
+     * Remove a child entity
+     * @param {Entity} child 
+     */
+    removeChild(child) {
+        const index = this.children.indexOf(child);
+        if (index !== -1) {
+            this.children.splice(index, 1);
+            child.parent = null;
+        }
+    }
+    
+    /**
+     * Update all components
+     * @param {number} deltaTime 
+     */
+    update(deltaTime) {
+        if (!this.enabled) return;
+        
+        for (const component of this.components.values()) {
+            if (component.enabled) {
+                component.update(deltaTime);
+            }
+        }
+        
+        for (const child of this.children) {
+            child.update(deltaTime);
+        }
+    }
+}
+
+/**
+ * System - Processes entities with specific components
+ * Systems contain the logic for updating entities
+ */
+class System {
+    constructor(name, requiredComponents = []) {
+        this.name = name;
+        this.requiredComponents = requiredComponents;
+        this.enabled = true;
+        this.priority = 0; // Lower = runs first
+    }
+    
+    /**
+     * Check if an entity matches this system's requirements
+     * @param {Entity} entity 
+     * @returns {boolean}
+     */
+    matches(entity) {
+        return this.requiredComponents.every(type => entity.hasComponent(type));
+    }
+    
+    /**
+     * Update method (override in subclasses)
+     * @param {Array<Entity>} entities - Entities that match this system
+     * @param {number} deltaTime 
+     */
+    update(entities, deltaTime) {
+        // Override in subclasses
+    }
+}
+
+/**
+ * EntityManager - Manages all entities and systems
+ * Central registry for the ECS architecture
+ */
+class EntityManager {
+    constructor() {
+        this.entities = new Map();
+        this.systems = [];
+        this.entitiesByTag = new Map();
+        
+        // Entity pools for recycling
+        this.pools = new Map();
+    }
+    
+    /**
+     * Create a new entity
+     * @param {string} name 
+     * @returns {Entity}
+     */
+    createEntity(name) {
+        const entity = new Entity(name);
+        this.entities.set(entity.id, entity);
+        return entity;
+    }
+    
+    /**
+     * Get an entity by ID
+     * @param {number} id 
+     * @returns {Entity|undefined}
+     */
+    getEntity(id) {
+        return this.entities.get(id);
+    }
+    
+    /**
+     * Remove an entity
+     * @param {number} id 
+     */
+    removeEntity(id) {
+        const entity = this.entities.get(id);
+        if (entity) {
+            // Remove from tag indices
+            for (const tag of entity.tags) {
+                const taggedEntities = this.entitiesByTag.get(tag);
+                if (taggedEntities) {
+                    taggedEntities.delete(entity);
+                }
+            }
+            
+            // Remove children
+            for (const child of entity.children) {
+                this.removeEntity(child.id);
+            }
+            
+            this.entities.delete(id);
+        }
+    }
+    
+    /**
+     * Get all entities with a specific tag
+     * @param {string} tag 
+     * @returns {Set<Entity>}
+     */
+    getEntitiesByTag(tag) {
+        return this.entitiesByTag.get(tag) || new Set();
+    }
+    
+    /**
+     * Get all entities with specific components
+     * @param  {...string} componentTypes 
+     * @returns {Array<Entity>}
+     */
+    getEntitiesWithComponents(...componentTypes) {
+        return Array.from(this.entities.values()).filter(entity => 
+            componentTypes.every(type => entity.hasComponent(type))
+        );
+    }
+    
+    /**
+     * Add a system
+     * @param {System} system 
+     */
+    addSystem(system) {
+        this.systems.push(system);
+        this.systems.sort((a, b) => a.priority - b.priority);
+    }
+    
+    /**
+     * Remove a system
+     * @param {string} name 
+     */
+    removeSystem(name) {
+        this.systems = this.systems.filter(s => s.name !== name);
+    }
+    
+    /**
+     * Update all systems
+     * @param {number} deltaTime 
+     */
+    update(deltaTime) {
+        for (const system of this.systems) {
+            if (!system.enabled) continue;
+            
+            const matchingEntities = Array.from(this.entities.values())
+                .filter(entity => entity.enabled && system.matches(entity));
+            
+            system.update(matchingEntities, deltaTime);
+        }
+    }
+    
+    /**
+     * Clear all entities and systems
+     */
+    clear() {
+        this.entities.clear();
+        this.systems = [];
+        this.entitiesByTag.clear();
+    }
+}
+
+// Global entity manager
+const entityManager = new EntityManager();
+
+/**
+ * RenderLayer - A single render layer with its own render target
+ * Used by LayerCompositor for advanced rendering effects
+ */
+class RenderLayer {
+    constructor(name, options = {}) {
+        this.name = name;
+        this.enabled = true;
+        this.visible = true;
+        this.priority = options.priority || 0;  // Lower = renders first
+        
+        // Blending options
+        this.blendMode = options.blendMode || 'normal'; // normal, additive, multiply, screen
+        this.opacity = options.opacity || 1.0;
+        
+        // Render target (optional - for post-processing)
+        this.renderTarget = null;
+        if (options.useRenderTarget) {
+            const width = options.width || window.innerWidth;
+            const height = options.height || window.innerHeight;
+            this.renderTarget = new THREE.WebGLRenderTarget(width, height, {
+                minFilter: THREE.LinearFilter,
+                magFilter: THREE.LinearFilter,
+                format: THREE.RGBAFormat
+            });
+        }
+        
+        // Objects to render in this layer
+        this.objects = [];
+        
+        // Layer-specific post-processing passes
+        this.passes = [];
+        
+        // Layer mask (for selective rendering)
+        this.mask = null;
+    }
+    
+    /**
+     * Add an object to this layer
+     * @param {THREE.Object3D} object 
+     */
+    addObject(object) {
+        if (!this.objects.includes(object)) {
+            this.objects.push(object);
+        }
+    }
+    
+    /**
+     * Remove an object from this layer
+     * @param {THREE.Object3D} object 
+     */
+    removeObject(object) {
+        const index = this.objects.indexOf(object);
+        if (index !== -1) {
+            this.objects.splice(index, 1);
+        }
+    }
+    
+    /**
+     * Add a post-processing pass
+     * @param {THREE.Pass} pass 
+     */
+    addPass(pass) {
+        this.passes.push(pass);
+    }
+    
+    /**
+     * Set layer visibility
+     * @param {boolean} visible 
+     */
+    setVisible(visible) {
+        this.visible = visible;
+        for (const obj of this.objects) {
+            obj.visible = visible;
+        }
+    }
+    
+    /**
+     * Resize render target
+     * @param {number} width 
+     * @param {number} height 
+     */
+    resize(width, height) {
+        if (this.renderTarget) {
+            this.renderTarget.setSize(width, height);
+        }
+    }
+    
+    /**
+     * Dispose of resources
+     */
+    dispose() {
+        if (this.renderTarget) {
+            this.renderTarget.dispose();
+        }
+        for (const pass of this.passes) {
+            if (pass.dispose) pass.dispose();
+        }
+    }
+}
+
+/**
+ * LayerCompositor - Manages multiple render layers and composites them
+ * Enables complex multi-layer rendering effects
+ */
+class LayerCompositor {
+    constructor(renderer, scene, camera) {
+        this.renderer = renderer;
+        this.scene = scene;
+        this.camera = camera;
+        
+        // Render layers (sorted by priority)
+        this.layers = new Map();
+        this.sortedLayers = [];
+        
+        // Composite shader for blending layers
+        this.compositeShader = {
+            uniforms: {
+                tBase: { value: null },
+                tLayer: { value: null },
+                uOpacity: { value: 1.0 },
+                uBlendMode: { value: 0 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D tBase;
+                uniform sampler2D tLayer;
+                uniform float uOpacity;
+                uniform int uBlendMode;
+                varying vec2 vUv;
+                
+                vec3 blendNormal(vec3 base, vec3 blend, float opacity) {
+                    return mix(base, blend, opacity);
+                }
+                
+                vec3 blendAdditive(vec3 base, vec3 blend, float opacity) {
+                    return base + blend * opacity;
+                }
+                
+                vec3 blendMultiply(vec3 base, vec3 blend, float opacity) {
+                    return mix(base, base * blend, opacity);
+                }
+                
+                vec3 blendScreen(vec3 base, vec3 blend, float opacity) {
+                    return mix(base, 1.0 - (1.0 - base) * (1.0 - blend), opacity);
+                }
+                
+                void main() {
+                    vec4 baseColor = texture2D(tBase, vUv);
+                    vec4 layerColor = texture2D(tLayer, vUv);
+                    
+                    vec3 result;
+                    if (uBlendMode == 0) {
+                        result = blendNormal(baseColor.rgb, layerColor.rgb, uOpacity * layerColor.a);
+                    } else if (uBlendMode == 1) {
+                        result = blendAdditive(baseColor.rgb, layerColor.rgb, uOpacity);
+                    } else if (uBlendMode == 2) {
+                        result = blendMultiply(baseColor.rgb, layerColor.rgb, uOpacity);
+                    } else {
+                        result = blendScreen(baseColor.rgb, layerColor.rgb, uOpacity);
+                    }
+                    
+                    gl_FragColor = vec4(result, 1.0);
+                }
+            `
+        };
+        
+        // Composition render targets
+        this.compositeTargets = [
+            new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight),
+            new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight)
+        ];
+        this.currentCompositeTarget = 0;
+        
+        // Full screen quad for compositing
+        this.compositeMaterial = new THREE.ShaderMaterial(this.compositeShader);
+        this.compositeQuad = new THREE.Mesh(
+            new THREE.PlaneGeometry(2, 2),
+            this.compositeMaterial
+        );
+        this.compositeScene = new THREE.Scene();
+        this.compositeScene.add(this.compositeQuad);
+        this.compositeCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    }
+    
+    /**
+     * Create and add a new render layer
+     * @param {string} name 
+     * @param {Object} options 
+     * @returns {RenderLayer}
+     */
+    createLayer(name, options = {}) {
+        const layer = new RenderLayer(name, options);
+        this.layers.set(name, layer);
+        this.sortLayers();
+        return layer;
+    }
+    
+    /**
+     * Get a layer by name
+     * @param {string} name 
+     * @returns {RenderLayer|undefined}
+     */
+    getLayer(name) {
+        return this.layers.get(name);
+    }
+    
+    /**
+     * Remove a layer
+     * @param {string} name 
+     */
+    removeLayer(name) {
+        const layer = this.layers.get(name);
+        if (layer) {
+            layer.dispose();
+            this.layers.delete(name);
+            this.sortLayers();
+        }
+    }
+    
+    /**
+     * Sort layers by priority
+     */
+    sortLayers() {
+        this.sortedLayers = Array.from(this.layers.values())
+            .sort((a, b) => a.priority - b.priority);
+    }
+    
+    /**
+     * Get blend mode as integer for shader
+     * @param {string} mode 
+     * @returns {number}
+     */
+    _getBlendModeInt(mode) {
+        switch (mode) {
+            case 'normal': return 0;
+            case 'additive': return 1;
+            case 'multiply': return 2;
+            case 'screen': return 3;
+            default: return 0;
+        }
+    }
+    
+    /**
+     * Render all layers and composite
+     * @returns {THREE.WebGLRenderTarget} Final composited render target
+     */
+    render() {
+        if (this.sortedLayers.length === 0) return null;
+        
+        // Track which composite target is current
+        let currentTarget = 0;
+        let firstLayer = true;
+        
+        for (const layer of this.sortedLayers) {
+            if (!layer.enabled || !layer.visible) continue;
+            
+            // Update object visibility for this layer
+            for (const obj of layer.objects) {
+                obj.visible = true;
+            }
+            
+            // Render layer to its target or directly
+            if (layer.renderTarget) {
+                this.renderer.setRenderTarget(layer.renderTarget);
+                this.renderer.render(this.scene, this.camera);
+                
+                // Apply layer-specific passes
+                // (Would need a mini-composer per layer for full implementation)
+            }
+            
+            // Restore visibility
+            for (const obj of layer.objects) {
+                obj.visible = layer.visible;
+            }
+            
+            firstLayer = false;
+        }
+        
+        // Return final composite
+        this.renderer.setRenderTarget(null);
+        return this.compositeTargets[currentTarget];
+    }
+    
+    /**
+     * Resize all render targets
+     * @param {number} width 
+     * @param {number} height 
+     */
+    resize(width, height) {
+        for (const target of this.compositeTargets) {
+            target.setSize(width, height);
+        }
+        for (const layer of this.layers.values()) {
+            layer.resize(width, height);
+        }
+    }
+    
+    /**
+     * Dispose of all resources
+     */
+    dispose() {
+        for (const target of this.compositeTargets) {
+            target.dispose();
+        }
+        for (const layer of this.layers.values()) {
+            layer.dispose();
+        }
+        this.compositeMaterial.dispose();
+        this.compositeQuad.geometry.dispose();
+    }
+}
+
+// Layer compositor instance (initialized after renderer is created)
+let layerCompositor = null;
+
+/**
+ * Initialize the layer compositor
+ * Call this after renderer, scene, and camera are created
+ */
+function initLayerCompositor() {
+    if (!renderer || !scene || !camera) {
+        console.warn('Cannot initialize LayerCompositor: renderer, scene, or camera not ready');
+        return;
+    }
+    
+    layerCompositor = new LayerCompositor(renderer, scene, camera);
+    
+    // Create default layers
+    layerCompositor.createLayer('background', { priority: 0 });
+    layerCompositor.createLayer('particles', { priority: 10 });
+    layerCompositor.createLayer('tendrils', { priority: 20 });
+    layerCompositor.createLayer('dust', { priority: 30 });
+    layerCompositor.createLayer('effects', { priority: 40, blendMode: 'additive' });
+    
+    console.log('LayerCompositor initialized with 5 default layers');
+}
+
+// Global animation manager instance
+const animationManager = new AnimationManager();
+
 // Define the pass-through vertex shader once
 const defaultPassThruVertexShader = `
 varying vec2 vUv;
@@ -227,12 +1039,90 @@ uniform float uLayerFluidStrength[LAYER_COUNT];
 uniform float uLayerStiffness[LAYER_COUNT];
 uniform float uTime;
 
+// === ENHANCED PHYSICS PARAMETERS ===
+// Vortex Confinement (turbulence enhancement)
+uniform float uVortexConfinementStrength;
+// Verlet Integration support
+uniform float uDeltaTime;  // Actual delta time for physics
+uniform float uPreviousPositionBlend;  // Blend factor for position history
+
 const float MIN_DIST_SQ = 0.01;
 const float BEHAVIOR_STIFF = 0.0;
 const float BEHAVIOR_FLUID = 1.0;
 const float BEHAVIOR_ORBITING = 2.0;
 
 ${simplexNoise3d}
+
+// === VORTEX CONFINEMENT ===
+// Creates swirling turbulent motion by amplifying rotation in the velocity field
+// This is a key technique from fluid simulation that makes motion look more organic
+vec3 calculateVortexConfinement(vec3 pos, float strength) {
+    // Sample velocity field around this point to estimate vorticity (curl of velocity)
+    float eps = 0.5;  // Sampling distance
+    
+    // Use noise as a proxy for the velocity field
+    float noiseScale = 0.08;
+    vec3 samplePos = pos * noiseScale + uNoiseTime * 0.3;
+    
+    // Compute curl of the noise field (approximates vorticity)
+    // curl = (dN_z/dy - dN_y/dz, dN_x/dz - dN_z/dx, dN_y/dx - dN_x/dy)
+    float nx_yp = snoise(samplePos + vec3(0.0, eps, 0.0) + vec3(0.0, 0.0, 0.0));
+    float nx_ym = snoise(samplePos - vec3(0.0, eps, 0.0) + vec3(0.0, 0.0, 0.0));
+    float ny_zp = snoise(samplePos + vec3(0.0, 0.0, eps) + vec3(100.0, 0.0, 0.0));
+    float ny_zm = snoise(samplePos - vec3(0.0, 0.0, eps) + vec3(100.0, 0.0, 0.0));
+    float nz_xp = snoise(samplePos + vec3(eps, 0.0, 0.0) + vec3(0.0, 100.0, 0.0));
+    float nz_xm = snoise(samplePos - vec3(eps, 0.0, 0.0) + vec3(0.0, 100.0, 0.0));
+    float nx_zp = snoise(samplePos + vec3(0.0, 0.0, eps) + vec3(0.0, 0.0, 0.0));
+    float nx_zm = snoise(samplePos - vec3(0.0, 0.0, eps) + vec3(0.0, 0.0, 0.0));
+    float ny_xp = snoise(samplePos + vec3(eps, 0.0, 0.0) + vec3(100.0, 0.0, 0.0));
+    float ny_xm = snoise(samplePos - vec3(eps, 0.0, 0.0) + vec3(100.0, 0.0, 0.0));
+    float nz_yp = snoise(samplePos + vec3(0.0, eps, 0.0) + vec3(0.0, 100.0, 0.0));
+    float nz_ym = snoise(samplePos - vec3(0.0, eps, 0.0) + vec3(0.0, 100.0, 0.0));
+    
+    // Calculate curl (vorticity)
+    float invEps2 = 1.0 / (2.0 * eps);
+    vec3 omega = vec3(
+        (nz_yp - nz_ym - ny_zp + ny_zm) * invEps2,
+        (nx_zp - nx_zm - nz_xp + nz_xm) * invEps2,
+        (ny_xp - ny_xm - nx_yp + nx_ym) * invEps2
+    );
+    
+    float omegaLen = length(omega);
+    if (omegaLen < 0.001) return vec3(0.0);
+    
+    // Normalize vorticity direction
+    vec3 omegaNorm = omega / omegaLen;
+    
+    // Gradient of vorticity magnitude (points toward vortex centers)
+    float om_xp = length(vec3(
+        (snoise(samplePos + vec3(eps, eps, 0.0) + vec3(0.0, 100.0, 0.0)) - snoise(samplePos + vec3(eps, -eps, 0.0) + vec3(0.0, 100.0, 0.0))) * invEps2,
+        0.0, 0.0
+    ));
+    float om_xm = length(vec3(
+        (snoise(samplePos - vec3(eps, eps, 0.0) + vec3(0.0, 100.0, 0.0)) - snoise(samplePos - vec3(eps, -eps, 0.0) + vec3(0.0, 100.0, 0.0))) * invEps2,
+        0.0, 0.0
+    ));
+    float om_yp = omegaLen;  // Simplified - use current omega
+    float om_ym = omegaLen;
+    float om_zp = omegaLen;
+    float om_zm = omegaLen;
+    
+    vec3 eta = vec3(om_xp - om_xm, om_yp - om_ym, om_zp - om_zm) * invEps2;
+    float etaLen = length(eta);
+    if (etaLen < 0.001) return vec3(0.0);
+    
+    vec3 etaNorm = eta / etaLen;
+    
+    // Vortex confinement force: cross(eta, omega) * strength
+    // This pushes fluid toward vortex cores, counteracting numerical diffusion
+    vec3 confinementForce = cross(etaNorm, omega) * strength;
+    
+    // Modulate by distance from center - less confinement at edges
+    float dist = length(pos);
+    float distFalloff = smoothstep(uMembraneMaxRadius, uMembraneMinRadius * 0.5, dist);
+    
+    return confinementForce * distFalloff;
+}
 
 // Helper to get layer index from velocity.w
 int getLayerIndex(float layerFloat) {
@@ -871,6 +1761,10 @@ void main() {
     vec3 modifiedMembraneCurlForce = membraneCurlNoiseForce * membraneCurlBoostFactor;
     vec3 modifiedAmbientJitterForce = ambientJitterForce * membraneJitterBoostFactor;
 
+    // --- Vortex Confinement (enhanced turbulence) ---
+    vec3 vortexConfinementForce = calculateVortexConfinement(particlePosition, uVortexConfinementStrength);
+    vec3 scaledVortexConfinement = vortexConfinementForce * forceMultiplier;
+
     // --- Combine Forces (Layer-aware) ---
     // Scale noise/turbulence forces by layer's force multiplier
     vec3 scaledCurlNoise = curlNoiseForce * forceMultiplier;
@@ -898,7 +1792,8 @@ void main() {
                       scaledMicro +                                        // Per-particle micro-movements (scaled)
                       deformationForce +                                   // Cloud deformation towards other windows
                       surfaceTensionForce +                                // Surface tension at membrane
-                      clusteringForce;                                     // Particle clustering
+                      clusteringForce +                                    // Particle clustering
+                      scaledVortexConfinement;                             // Vortex confinement turbulence
 
     // --- Apply Forces to Velocity ---
     particleVelocity += totalForce;
@@ -1033,6 +1928,17 @@ uniform float uRimLightStrength;
 uniform float uAmbientOcclusionStrength;
 // Quality/LOD
 uniform float uQualityMultiplier;
+// LOD system uniforms (distance-based quality scaling)
+uniform float uLODSizeMultiplier;
+uniform float uLODAlphaMultiplier;
+uniform float uLODComplexity;
+
+// === PARTICLE CHARACTER SYSTEM UNIFORMS ===
+uniform float uSquashStretchIntensity;   // How much particles elongate based on velocity (0.0-1.0)
+uniform float uSecondaryMotionStrength;  // Drag/momentum effect intensity (0.0-1.0)
+uniform float uMoodWaveSpeed;            // Global mood oscillation speed
+uniform float uMoodIntensity;            // How much mood affects particle behavior (0.0-1.0)
+uniform float uBreathingPhase;           // Global breathing rhythm phase (0-2PI)
 
 // Layer system uniforms for visual differentiation
 #define LAYER_COUNT 8
@@ -1056,9 +1962,22 @@ varying float vAmbientOcclusion;
 varying float vSubsurfaceScatter;
 varying float vLayerOpacity;
 
+// === PARTICLE CHARACTER VARYINGS ===
+varying float vSquashFactor;         // How elongated this particle is (1.0 = normal, >1 = stretched)
+varying float vMood;                 // Per-particle mood value (-1 to 1, affects behavior)
+varying vec2 vStretchDirection;      // Direction of velocity-based stretch in screen space
+varying float vSecondaryOffset;      // Secondary motion phase offset
+
 // Simple hash for random variation per particle
 float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+// Higher quality 2D hash for mood variation
+float hash2D(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
 }
 
 int getLayerIdx(float layerFloat) {
@@ -1085,6 +2004,50 @@ void main() {
     float randomSeed = hash(uv);
     float randomSize = 0.7 + randomSeed * 0.6;        // Size varies 0.7 to 1.3
     float randomBrightness = 0.8 + randomSeed * 0.2;  // Brightness varies 0.8 to 1.0
+
+    // === PARTICLE CHARACTER SYSTEM CALCULATIONS ===
+    // Scale character effects by LOD complexity (reduce at distance)
+    float lodComplexity = uLODComplexity;
+    
+    // --- Per-Particle Mood ---
+    // Each particle has a unique "personality" that affects its behavior
+    // Mood oscillates with time, creating subtle breathing/pulsing
+    float moodSeed = hash2D(uv * 7.31);
+    float moodPhase = moodSeed * 6.283 + uTime * uMoodWaveSpeed * (0.5 + moodSeed * 0.5);
+    vMood = sin(moodPhase + uBreathingPhase * (0.3 + moodSeed * 0.7)) * uMoodIntensity * lodComplexity;
+    // Add age influence - young particles are more "excited", old particles calmer
+    float ageNormalized = age / uMaxLifetime;
+    float ageMoodModifier = 1.0 - smoothstep(0.0, 0.3, ageNormalized) * 0.3; // Young = energetic
+    ageMoodModifier *= 1.0 - smoothstep(0.7, 1.0, ageNormalized) * 0.4;       // Old = calming down
+    vMood *= ageMoodModifier;
+    
+    // --- Squash-Stretch Based on Velocity ---
+    // Fast-moving particles elongate in direction of motion (cartoon physics)
+    // This creates organic, fluid-like movement
+    float speedNormalized = clamp(speed / 2.0, 0.0, 1.0); // Normalize to 0-1
+    float stretchAmount = speedNormalized * uSquashStretchIntensity * lodComplexity;
+    // Squash-stretch factor: 1.0 = normal, >1.0 = stretched along velocity
+    vSquashFactor = 1.0 + stretchAmount * 0.8;
+    // Include mood in stretch (excited particles stretch more)
+    vSquashFactor *= 1.0 + vMood * 0.1;
+    
+    // Calculate velocity direction in screen space for fragment shader
+    vec4 mvPos = modelViewMatrix * vec4(particlePosition, 1.0);
+    vec3 velWorld = normalize(velocity + vec3(0.0001)); // Avoid zero division
+    vec4 velEnd = modelViewMatrix * vec4(particlePosition + velWorld * 0.1, 1.0);
+    vec2 velScreen = normalize((velEnd.xy / velEnd.w) - (mvPos.xy / mvPos.w) + vec2(0.0001));
+    vStretchDirection = velScreen;
+    
+    // --- Secondary Motion (Momentum/Drag) ---
+    // Creates feeling of particles being "pulled" by their velocity
+    // Reduce at distance via LOD complexity
+    float secondarySeed = hash(uv + vec2(0.123, 0.456));
+    vSecondaryOffset = secondarySeed * 6.283; // Random phase offset
+    // Secondary motion affects position slightly in direction of velocity
+    float secondaryDisplacement = sin(uTime * 8.0 + vSecondaryOffset) * uSecondaryMotionStrength * lodComplexity;
+    secondaryDisplacement *= speedNormalized * 0.3; // Scale with speed
+    vec3 secondaryMotion = velWorld * secondaryDisplacement;
+    particlePosition += secondaryMotion;
 
     // Pass to fragment shader
     vDistFromCenter = distFromCenter;
@@ -1205,7 +2168,18 @@ void main() {
     float edgeSizeReduction = mix(1.0, 0.6, 1.0 - vEdgeFade);
     float baseSizeFromSpeed = mix(0.8, 1.3, speedInfluence);
     float sizeFromDist = mix(1.0, 0.85, sizeNormalizedDist);
-    gl_PointSize = uPointSize * layerBaseSize * baseSizeFromSpeed * sizeFromDist * edgeSizeReduction * randomSize * uQualityMultiplier * (300.0 / -mvPosition.z);
+    
+    // === PARTICLE CHARACTER SIZE MODULATION ===
+    // Mood affects size (excited particles grow slightly)
+    float moodSizeModifier = 1.0 + vMood * 0.15;
+    // Squash-stretch affects perpendicular size (stretch = thinner)
+    // This is compensated by elongation in fragment shader
+    float squashCompensation = 1.0 / sqrt(vSquashFactor);
+    
+    // Apply LOD-based size reduction for distant views
+    float lodSize = uQualityMultiplier * uLODSizeMultiplier;
+    
+    gl_PointSize = uPointSize * layerBaseSize * baseSizeFromSpeed * sizeFromDist * edgeSizeReduction * randomSize * moodSizeModifier * squashCompensation * lodSize * (300.0 / -mvPosition.z);
 }
 `;
 
@@ -1225,27 +2199,59 @@ varying float vAmbientOcclusion;
 varying float vSubsurfaceScatter;
 varying float vLayerOpacity;
 
+// === PARTICLE CHARACTER VARYINGS ===
+varying float vSquashFactor;
+varying float vMood;
+varying vec2 vStretchDirection;
+varying float vSecondaryOffset;
+
 uniform float uMembraneMaxRadius;
+uniform float uCoreGlowStrength;      // Volumetric core glow intensity
+uniform float uCoreGlowRadius;        // Radius of core glow effect
 
 void main() {
-    // High quality circular particle with crisp edges when zoomed
+    // === PARTICLE CHARACTER: SQUASH-STRETCH DEFORMATION ===
+    // Transform point coord based on velocity direction to create elongated particles
     vec2 center = gl_PointCoord - vec2(0.5);
-    float dist = length(center);
+    
+    // Apply squash-stretch transform
+    // Stretch along velocity direction, squash perpendicular
+    float stretchScale = vSquashFactor;
+    float squashScale = 1.0 / sqrt(stretchScale); // Preserve area
+    
+    // Create rotation matrix to align with velocity direction
+    vec2 stretchDir = normalize(vStretchDirection + vec2(0.0001));
+    vec2 perpDir = vec2(-stretchDir.y, stretchDir.x);
+    
+    // Transform point coordinates
+    // Project center onto stretch and perpendicular directions
+    float alongStretch = dot(center, stretchDir);
+    float perpToStretch = dot(center, perpDir);
+    
+    // Apply deformation (compress along stretch direction to elongate)
+    alongStretch /= stretchScale;
+    perpToStretch *= squashScale;
+    
+    // Reconstruct deformed center
+    vec2 deformedCenter = alongStretch * stretchDir + perpToStretch * perpDir;
+    float dist = length(deformedCenter);
 
-    // Discard outside circle for clean edges
+    // Discard outside deformed circle for clean edges
     if (dist > 0.5) discard;
     
-    // --- High Resolution Particle Shape ---
+    // --- High Resolution Particle Shape with Character ---
     // Crisp circular core with soft organic outer glow
-    // This creates sharp particles that don't blur when zoomed in
     
     // Inner core: crisp circular shape with antialiased edge
+    // Mood affects core softness - excited particles have slightly sharper edges
     float coreRadius = 0.35;
-    float coreSoftness = 0.08; // Thin antialiased edge
+    float coreSoftness = 0.08 + vMood * 0.02; // Mood affects edge sharpness
     float core = 1.0 - smoothstep(coreRadius - coreSoftness, coreRadius + coreSoftness, dist);
     
     // Outer glow: soft falloff for volumetric cloud feel
-    float glow = smoothstep(0.5, 0.15, dist) * 0.5;
+    // Stretched particles have more directional glow
+    float glowIntensity = 0.5 - (vSquashFactor - 1.0) * 0.15; // Less glow when stretched
+    float glow = smoothstep(0.5, 0.15, dist) * glowIntensity;
     
     // Combine core and glow
     float shape = core + glow * (1.0 - core * 0.7);
@@ -1253,6 +2259,9 @@ void main() {
     // Apply gaussian-like density for particle center
     float density = exp(-dist * dist * 6.0);
     shape = mix(shape, density, 0.3); // Blend for organic feel
+    
+    // Mood affects overall particle intensity
+    shape *= 1.0 + vMood * 0.1;
 
     // Base opacity with depth fade for volumetric feel, scaled by layer opacity
     float baseAlpha = 0.18 * vLayerOpacity;
@@ -1282,15 +2291,28 @@ void main() {
     // Subtle color shift at edges for depth
     float edgeColor = smoothstep(0.2, 0.45, dist) * 0.1;
     finalColor = mix(finalColor, finalColor * vec3(0.9, 0.95, 1.0), edgeColor);
+    
+    // === VOLUMETRIC CORE GLOW ===
+    // Particles near the core get enhanced glow based on distance from center
+    float coreProximity = 1.0 - smoothstep(0.0, uCoreGlowRadius, vDistFromCenter);
+    float coreGlow = coreProximity * uCoreGlowStrength;
+    
+    // Core particles emit extra light (additive)
+    vec3 coreGlowColor = vec3(1.0, 0.95, 0.9) * coreGlow; // Warm white core
+    finalColor += coreGlowColor * (0.5 + 0.5 * smoothstep(0.3, 0.0, dist)); // Stronger at particle center
+    
+    // Core particles have enhanced bloom contribution
+    float coreAlphaBoost = coreGlow * 0.3;
 
     // Boost alpha slightly for rim-lit particles
-    float finalAlpha = alpha + vRimLight * 0.1;
+    float finalAlpha = alpha + vRimLight * 0.1 + coreAlphaBoost;
 
     gl_FragColor = vec4(finalColor, finalAlpha);
 }
 `;
 
-// --- Custom Post-Processing Shader (Vignette + Chromatic Aberration + Film Grain) ---
+// --- Enhanced Post-Processing Shader (Visual Effects Layer) ---
+// Includes: Vignette, Chromatic Aberration/Dispersion, Film Grain, Caustics, Radial Blur, DOF
 const FilmShader = {
     uniforms: {
         'tDiffuse': { value: null },
@@ -1298,7 +2320,16 @@ const FilmShader = {
         'uVignetteStrength': { value: 0.30 },    // Subtle organic vignette
         'uVignetteRadius': { value: 0.75 },      // Gentle vignette radius
         'uChromaticAberration': { value: 0.002 }, // Very subtle aberration
-        'uFilmGrain': { value: 0.018 }           // Barely perceptible grain
+        'uFilmGrain': { value: 0.018 },          // Barely perceptible grain
+        // === ENHANCED VISUAL EFFECTS ===
+        'uCausticsStrength': { value: 0.08 },    // Underwater-like caustics overlay
+        'uCausticsScale': { value: 2.5 },        // Scale of caustic patterns
+        'uDispersionStrength': { value: 0.003 }, // Rainbow dispersion at edges
+        'uRadialBlurStrength': { value: 0.0 },   // Motion blur from center (0 = off)
+        'uRadialBlurCenter': { value: null },    // Will be set to Vector2(0.5, 0.5)
+        // === DEPTH OF FIELD ===
+        'uDofStrength': { value: 0.0 },          // DOF blur strength (0 = off)
+        'uDofFocalDistance': { value: 0.5 }      // Focal distance (0-1, 0.5 = center)
     },
     vertexShader: `
         varying vec2 vUv;
@@ -1314,6 +2345,13 @@ const FilmShader = {
         uniform float uVignetteRadius;
         uniform float uChromaticAberration;
         uniform float uFilmGrain;
+        uniform float uCausticsStrength;
+        uniform float uCausticsScale;
+        uniform float uDispersionStrength;
+        uniform float uRadialBlurStrength;
+        uniform vec2 uRadialBlurCenter;
+        uniform float uDofStrength;
+        uniform float uDofFocalDistance;
         varying vec2 vUv;
 
         // Improved noise function for film grain
@@ -1328,24 +2366,146 @@ const FilmShader = {
             grain += random(uv * 4.0 + fract(time * 0.2)) * 0.25;
             return grain / 1.75;
         }
+        
+        // === BOKEH-STYLE DEPTH OF FIELD ===
+        vec3 bokehBlur(sampler2D tex, vec2 uv, float blurAmount) {
+            vec3 color = vec3(0.0);
+            float totalWeight = 0.0;
+            
+            // Circular bokeh pattern (hexagonal approximation)
+            const int samples = 12;
+            const float PI = 3.14159265359;
+            
+            for (int i = 0; i < samples; i++) {
+                float angle = float(i) * PI * 2.0 / float(samples);
+                vec2 offset = vec2(cos(angle), sin(angle)) * blurAmount;
+                
+                // Sample at multiple radii for smoother bokeh
+                for (float r = 0.3; r <= 1.0; r += 0.35) {
+                    vec2 sampleUV = uv + offset * r;
+                    vec3 sampleColor = texture2D(tex, sampleUV).rgb;
+                    
+                    // Bright spots get more weight (bokeh effect)
+                    float brightness = dot(sampleColor, vec3(0.299, 0.587, 0.114));
+                    float weight = 1.0 + brightness * 2.0;
+                    
+                    color += sampleColor * weight;
+                    totalWeight += weight;
+                }
+            }
+            
+            return color / totalWeight;
+        }
+        
+        // === CAUSTICS PATTERN ===
+        // Creates underwater-like light patterns
+        float causticPattern(vec2 uv, float time) {
+            vec2 p = uv * uCausticsScale;
+            float t = time * 0.3;
+            
+            // Multiple layers of animated sine waves
+            float caustic = 0.0;
+            caustic += sin(p.x * 3.1 + t) * sin(p.y * 3.7 - t * 0.7) * 0.5;
+            caustic += sin(p.x * 5.3 - t * 1.3) * sin(p.y * 4.9 + t * 0.9) * 0.3;
+            caustic += sin(p.x * 7.1 + p.y * 6.3 + t * 0.5) * 0.2;
+            
+            // Voronoi-like cells
+            vec2 cellUV = fract(p + vec2(sin(t * 0.5), cos(t * 0.4)) * 0.3) - 0.5;
+            float cells = 1.0 - smoothstep(0.0, 0.4, length(cellUV));
+            caustic += cells * 0.3;
+            
+            return caustic * 0.5 + 0.5; // Normalize to 0-1
+        }
+        
+        // === CHROMATIC DISPERSION ===
+        // Full rainbow spectrum dispersion (more than just R/B split)
+        vec3 chromaticDispersion(sampler2D tex, vec2 uv, vec2 center, float dist, float strength) {
+            // Sample at different wavelengths (Red, Orange, Yellow, Green, Cyan, Blue, Violet)
+            vec2 dir = normalize(center);
+            float dispBase = dist * strength;
+            
+            // Red channel - longest wavelength, least refracted
+            float r = texture2D(tex, uv + dir * dispBase * 1.0).r;
+            // Green channel
+            float g = texture2D(tex, uv + dir * dispBase * 0.0).g;
+            // Blue channel - shortest wavelength, most refracted  
+            float b = texture2D(tex, uv - dir * dispBase * 1.0).b;
+            
+            return vec3(r, g, b);
+        }
+        
+        // === RADIAL BLUR ===
+        // Motion blur emanating from center (for zoom/movement effects)
+        vec3 radialBlur(sampler2D tex, vec2 uv, vec2 center, float strength) {
+            vec3 color = vec3(0.0);
+            vec2 dir = uv - center;
+            float samples = 8.0;
+            
+            for (float i = 0.0; i < 8.0; i++) {
+                float t = i / samples;
+                vec2 offset = dir * t * strength;
+                color += texture2D(tex, uv - offset).rgb;
+            }
+            
+            return color / samples;
+        }
 
         void main() {
             vec2 uv = vUv;
-
-            // Chromatic aberration - offset R and B channels slightly
             vec2 center = uv - 0.5;
             float dist = length(center);
-            float aberrationStrength = uChromaticAberration * (1.0 + dist * 0.5);
-            vec2 offset = center * dist * aberrationStrength;
 
-            float r = texture2D(tDiffuse, uv + offset).r;
-            float g = texture2D(tDiffuse, uv).g;
-            float b = texture2D(tDiffuse, uv - offset).b;
-            vec3 color = vec3(r, g, b);
+            // === DEPTH OF FIELD (if enabled) ===
+            vec3 color;
+            if (uDofStrength > 0.001) {
+                // Calculate blur amount based on distance from focal point
+                // Areas far from focal distance get more blur
+                float focalDist = abs(dist - uDofFocalDistance);
+                float blurAmount = focalDist * uDofStrength * 0.02;
+                
+                // Apply bokeh blur
+                color = bokehBlur(tDiffuse, uv, blurAmount);
+                
+                // Apply chromatic aberration on top
+                float aberrationStrength = uChromaticAberration * (1.0 + dist * 0.5);
+                vec2 offset = center * dist * aberrationStrength;
+                color.r = bokehBlur(tDiffuse, uv + offset * 0.5, blurAmount).r;
+                color.b = bokehBlur(tDiffuse, uv - offset * 0.5, blurAmount).b;
+            }
+            // === RADIAL BLUR (if enabled) ===
+            else if (uRadialBlurStrength > 0.001) {
+                color = radialBlur(tDiffuse, uv, uRadialBlurCenter, uRadialBlurStrength);
+            } else {
+                // Standard chromatic aberration
+                float aberrationStrength = uChromaticAberration * (1.0 + dist * 0.5);
+                vec2 offset = center * dist * aberrationStrength;
 
-            // Soft vignette with smoother falloff
+                float r = texture2D(tDiffuse, uv + offset).r;
+                float g = texture2D(tDiffuse, uv).g;
+                float b = texture2D(tDiffuse, uv - offset).b;
+                color = vec3(r, g, b);
+            }
+            
+            // === CHROMATIC DISPERSION at edges ===
+            if (uDispersionStrength > 0.001 && dist > 0.3) {
+                float edgeFactor = smoothstep(0.3, 0.7, dist);
+                vec3 dispersed = chromaticDispersion(tDiffuse, uv, center, dist, uDispersionStrength);
+                color = mix(color, dispersed, edgeFactor * 0.5);
+            }
+            
+            // === CAUSTICS OVERLAY ===
+            if (uCausticsStrength > 0.001) {
+                float caustics = causticPattern(uv, uTime);
+                // Apply caustics more strongly to bright areas
+                float luminance = dot(color, vec3(0.299, 0.587, 0.114));
+                float causticIntensity = caustics * uCausticsStrength * (0.5 + luminance * 0.5);
+                // Add caustics as gentle additive light
+                color += vec3(causticIntensity * 0.8, causticIntensity * 0.9, causticIntensity * 1.0);
+            }
+
+            // === VIGNETTE ===
             float vignette = 1.0 - smoothstep(uVignetteRadius - 0.1, uVignetteRadius + uVignetteStrength, dist * 1.2);
-            vignette = pow(vignette, 1.2); // Subtle curve adjustment
+            vignette = pow(vignette, 1.2);
             color *= vignette;
 
             // Subtle blue tint in shadows
@@ -1353,7 +2513,7 @@ const FilmShader = {
             vec3 shadowTint = mix(color, color * vec3(0.9, 0.95, 1.05), (1.0 - luminance) * 0.15);
             color = shadowTint;
 
-            // Film grain - subtle and organic
+            // === FILM GRAIN ===
             float grain = filmGrain(uv * 3.0, uTime) * uFilmGrain;
             color += grain - uFilmGrain * 0.5;
 
@@ -1490,6 +2650,18 @@ const SURFACE_TENSION_STRENGTH = 0.02;  // Softer membrane cohesion
 const VISCOSITY_BASE = 0.990;           // Higher for smoother, more fluid motion
 const VISCOSITY_VARIATION = 0.020;
 const CLUSTERING_STRENGTH = 0.012;      // Subtle organelle-like clustering
+// Enhanced Physics - Turbulence
+const VORTEX_CONFINEMENT_STRENGTH = 0.15; // Creates swirling vortex structures
+
+// =============================================================================
+// PARTICLE CHARACTER SYSTEM CONFIGURATION
+// =============================================================================
+// Creates organic, living particle behavior with mood and squash-stretch
+const SQUASH_STRETCH_INTENSITY = 0.6;   // How much particles elongate when moving fast (0-1)
+const SECONDARY_MOTION_STRENGTH = 0.25; // Drag/momentum effect intensity (0-1)
+const MOOD_WAVE_SPEED = 0.8;            // Global mood oscillation speed
+const MOOD_INTENSITY = 0.5;             // How much mood affects particle behavior (0-1)
+
 // Lighting & Atmosphere - Bioluminescent glow
 const RIM_LIGHT_STRENGTH = 0.5;         // Subtle rim glow
 const AMBIENT_OCCLUSION_STRENGTH = 0.35; // Softer core shadows
@@ -1819,16 +2991,817 @@ let qualityMultiplier = 1.0;
 let fpsHistory = [];
 let lastQualityAdjustTime = 0;
 
+// =============================================================================
+// === LOD (LEVEL OF DETAIL) SYSTEM ===
+// =============================================================================
+// Distance-based quality scaling for particles, effects, and complexity
+
+/**
+ * LOD Configuration
+ * Defines quality levels based on distance from camera
+ */
+const LOD_CONFIG = {
+    // Distance thresholds (in world units)
+    distances: {
+        near: 40,      // Full quality zone
+        mid: 80,       // Medium quality zone
+        far: 150,      // Low quality zone
+        cull: 250      // Particles beyond this are culled
+    },
+    // Size multipliers per LOD level
+    sizeMultipliers: {
+        near: 1.0,
+        mid: 0.75,
+        far: 0.5,
+        minimal: 0.25
+    },
+    // Alpha multipliers per LOD level
+    alphaMultipliers: {
+        near: 1.0,
+        mid: 0.85,
+        far: 0.6,
+        minimal: 0.3
+    },
+    // Effect quality multipliers
+    effectQuality: {
+        near: 1.0,     // Full post-processing
+        mid: 0.8,      // Reduced bloom
+        far: 0.5,      // Minimal effects
+        minimal: 0.2   // Just basic rendering
+    },
+    // Particle complexity (affects secondary motion, character system)
+    complexity: {
+        near: 1.0,     // Full squash-stretch, mood, secondary motion
+        mid: 0.7,      // Reduced secondary motion
+        far: 0.3,      // Minimal character
+        minimal: 0.0   // Static particles
+    }
+};
+
+/**
+ * LODManager - Manages level of detail based on camera distance
+ * Provides smooth transitions between LOD levels for organic feel
+ */
+class LODManager {
+    constructor(config = LOD_CONFIG) {
+        this.config = config;
+        
+        // Current LOD state (smoothly interpolated)
+        this.currentSizeMultiplier = 1.0;
+        this.currentAlphaMultiplier = 1.0;
+        this.currentEffectQuality = 1.0;
+        this.currentComplexity = 1.0;
+        
+        // Target values (for smooth transitions)
+        this.targetSizeMultiplier = 1.0;
+        this.targetAlphaMultiplier = 1.0;
+        this.targetEffectQuality = 1.0;
+        this.targetComplexity = 1.0;
+        
+        // Transition speed (lower = smoother)
+        this.transitionSpeed = 3.0;
+        
+        // Current LOD level (for debugging/UI)
+        this.currentLevel = 'near';
+        
+        // Frustum culling bounds (updated each frame)
+        this.frustum = new THREE.Frustum();
+        this.frustumMatrix = new THREE.Matrix4();
+    }
+    
+    /**
+     * Update LOD based on camera distance
+     * @param {number} distanceFromCamera - Distance from camera to particle cloud center
+     * @param {number} deltaTime - Frame delta time for smooth transitions
+     */
+    update(distanceFromCamera, deltaTime) {
+        const { distances, sizeMultipliers, alphaMultipliers, effectQuality, complexity } = this.config;
+        
+        // Determine LOD level based on distance
+        let level, size, alpha, effect, complex;
+        
+        if (distanceFromCamera < distances.near) {
+            level = 'near';
+            size = sizeMultipliers.near;
+            alpha = alphaMultipliers.near;
+            effect = effectQuality.near;
+            complex = complexity.near;
+        } else if (distanceFromCamera < distances.mid) {
+            // Interpolate between near and mid
+            const t = (distanceFromCamera - distances.near) / (distances.mid - distances.near);
+            level = 'mid';
+            size = THREE.MathUtils.lerp(sizeMultipliers.near, sizeMultipliers.mid, t);
+            alpha = THREE.MathUtils.lerp(alphaMultipliers.near, alphaMultipliers.mid, t);
+            effect = THREE.MathUtils.lerp(effectQuality.near, effectQuality.mid, t);
+            complex = THREE.MathUtils.lerp(complexity.near, complexity.mid, t);
+        } else if (distanceFromCamera < distances.far) {
+            // Interpolate between mid and far
+            const t = (distanceFromCamera - distances.mid) / (distances.far - distances.mid);
+            level = 'far';
+            size = THREE.MathUtils.lerp(sizeMultipliers.mid, sizeMultipliers.far, t);
+            alpha = THREE.MathUtils.lerp(alphaMultipliers.mid, alphaMultipliers.far, t);
+            effect = THREE.MathUtils.lerp(effectQuality.mid, effectQuality.far, t);
+            complex = THREE.MathUtils.lerp(complexity.mid, complexity.far, t);
+        } else {
+            // Beyond far distance - minimal quality
+            const t = Math.min(1.0, (distanceFromCamera - distances.far) / (distances.cull - distances.far));
+            level = 'minimal';
+            size = THREE.MathUtils.lerp(sizeMultipliers.far, sizeMultipliers.minimal, t);
+            alpha = THREE.MathUtils.lerp(alphaMultipliers.far, alphaMultipliers.minimal, t);
+            effect = THREE.MathUtils.lerp(effectQuality.far, effectQuality.minimal, t);
+            complex = THREE.MathUtils.lerp(complexity.far, complexity.minimal, t);
+        }
+        
+        // Set target values
+        this.targetSizeMultiplier = size;
+        this.targetAlphaMultiplier = alpha;
+        this.targetEffectQuality = effect;
+        this.targetComplexity = complex;
+        this.currentLevel = level;
+        
+        // Smoothly interpolate current values toward targets
+        const lerpFactor = 1.0 - Math.exp(-this.transitionSpeed * deltaTime);
+        this.currentSizeMultiplier += (this.targetSizeMultiplier - this.currentSizeMultiplier) * lerpFactor;
+        this.currentAlphaMultiplier += (this.targetAlphaMultiplier - this.currentAlphaMultiplier) * lerpFactor;
+        this.currentEffectQuality += (this.targetEffectQuality - this.currentEffectQuality) * lerpFactor;
+        this.currentComplexity += (this.targetComplexity - this.currentComplexity) * lerpFactor;
+    }
+    
+    /**
+     * Update frustum for culling calculations
+     * @param {THREE.Camera} camera 
+     */
+    updateFrustum(camera) {
+        this.frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        this.frustum.setFromProjectionMatrix(this.frustumMatrix);
+    }
+    
+    /**
+     * Check if a bounding sphere is visible
+     * @param {THREE.Vector3} center - Center of bounding sphere
+     * @param {number} radius - Radius of bounding sphere
+     * @returns {boolean} True if visible
+     */
+    isVisible(center, radius) {
+        const sphere = new THREE.Sphere(center, radius);
+        return this.frustum.intersectsSphere(sphere);
+    }
+    
+    /**
+     * Get LOD values as uniform-ready object
+     * @returns {Object} Uniform values
+     */
+    getUniforms() {
+        return {
+            uLODSizeMultiplier: this.currentSizeMultiplier,
+            uLODAlphaMultiplier: this.currentAlphaMultiplier,
+            uLODComplexity: this.currentComplexity
+        };
+    }
+}
+
+// Global LOD manager instance
+const lodManager = new LODManager();
+
+// =============================================================================
+// === SPATIAL HASHING SYSTEM ===
+// =============================================================================
+// O(1) neighbor lookups for particle interactions
+
+/**
+ * SpatialHash - 3D spatial partitioning for efficient neighbor queries
+ * Used for particle-particle interactions, collision detection, and clustering
+ */
+class SpatialHash {
+    /**
+     * @param {number} cellSize - Size of each cell (should be >= interaction radius)
+     * @param {number} maxParticles - Maximum number of particles to track
+     */
+    constructor(cellSize = 5.0, maxParticles = 262144) {
+        this.cellSize = cellSize;
+        this.invCellSize = 1.0 / cellSize;
+        this.maxParticles = maxParticles;
+        
+        // Hash table: Map<cellKey, Set<particleIndex>>
+        this.cells = new Map();
+        
+        // Particle positions for quick lookup
+        this.positions = new Float32Array(maxParticles * 3);
+        this.activeCount = 0;
+        
+        // Reusable arrays for queries (avoid allocations)
+        this._queryResults = [];
+        this._cellKeys = [];
+        
+        // Statistics for debugging
+        this.stats = {
+            totalCells: 0,
+            avgParticlesPerCell: 0,
+            maxParticlesInCell: 0,
+            lastQueryTime: 0
+        };
+    }
+    
+    /**
+     * Hash a 3D position to a cell key
+     * @param {number} x 
+     * @param {number} y 
+     * @param {number} z 
+     * @returns {string} Cell key
+     */
+    hashPosition(x, y, z) {
+        const cellX = Math.floor(x * this.invCellSize);
+        const cellY = Math.floor(y * this.invCellSize);
+        const cellZ = Math.floor(z * this.invCellSize);
+        return `${cellX},${cellY},${cellZ}`;
+    }
+    
+    /**
+     * Clear the spatial hash (call before rebuilding)
+     */
+    clear() {
+        this.cells.clear();
+        this.activeCount = 0;
+    }
+    
+    /**
+     * Insert a particle into the hash
+     * @param {number} index - Particle index
+     * @param {number} x 
+     * @param {number} y 
+     * @param {number} z 
+     */
+    insert(index, x, y, z) {
+        const key = this.hashPosition(x, y, z);
+        
+        if (!this.cells.has(key)) {
+            this.cells.set(key, new Set());
+        }
+        this.cells.get(key).add(index);
+        
+        // Store position
+        const i3 = index * 3;
+        this.positions[i3] = x;
+        this.positions[i3 + 1] = y;
+        this.positions[i3 + 2] = z;
+        
+        this.activeCount = Math.max(this.activeCount, index + 1);
+    }
+    
+    /**
+     * Build the spatial hash from a Float32Array of positions
+     * @param {Float32Array} positionData - Position data (xyzw per particle)
+     * @param {number} count - Number of particles
+     * @param {number} stride - Values per particle (default 4 for xyzw)
+     */
+    buildFromArray(positionData, count, stride = 4) {
+        this.clear();
+        
+        for (let i = 0; i < count; i++) {
+            const offset = i * stride;
+            const x = positionData[offset];
+            const y = positionData[offset + 1];
+            const z = positionData[offset + 2];
+            this.insert(i, x, y, z);
+        }
+        
+        this.updateStats();
+    }
+    
+    /**
+     * Find all particles within a radius of a position
+     * @param {number} x - Query position x
+     * @param {number} y - Query position y
+     * @param {number} z - Query position z
+     * @param {number} radius - Search radius
+     * @param {number} maxResults - Maximum number of results (0 = unlimited)
+     * @returns {Array<{index: number, distSq: number}>} Neighbor particles
+     */
+    queryRadius(x, y, z, radius, maxResults = 0) {
+        const startTime = performance.now();
+        this._queryResults.length = 0;
+        
+        const radiusSq = radius * radius;
+        const cellRadius = Math.ceil(radius * this.invCellSize);
+        
+        const cellX = Math.floor(x * this.invCellSize);
+        const cellY = Math.floor(y * this.invCellSize);
+        const cellZ = Math.floor(z * this.invCellSize);
+        
+        // Check all cells within radius
+        for (let dx = -cellRadius; dx <= cellRadius; dx++) {
+            for (let dy = -cellRadius; dy <= cellRadius; dy++) {
+                for (let dz = -cellRadius; dz <= cellRadius; dz++) {
+                    const key = `${cellX + dx},${cellY + dy},${cellZ + dz}`;
+                    const cell = this.cells.get(key);
+                    
+                    if (cell) {
+                        for (const index of cell) {
+                            const i3 = index * 3;
+                            const px = this.positions[i3];
+                            const py = this.positions[i3 + 1];
+                            const pz = this.positions[i3 + 2];
+                            
+                            const dx2 = px - x;
+                            const dy2 = py - y;
+                            const dz2 = pz - z;
+                            const distSq = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
+                            
+                            if (distSq <= radiusSq) {
+                                this._queryResults.push({ index, distSq });
+                                
+                                if (maxResults > 0 && this._queryResults.length >= maxResults) {
+                                    this.stats.lastQueryTime = performance.now() - startTime;
+                                    return this._queryResults;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        this.stats.lastQueryTime = performance.now() - startTime;
+        return this._queryResults;
+    }
+    
+    /**
+     * Find K nearest neighbors (sorted by distance)
+     * @param {number} x 
+     * @param {number} y 
+     * @param {number} z 
+     * @param {number} k - Number of neighbors
+     * @param {number} maxRadius - Maximum search radius
+     * @returns {Array<{index: number, distSq: number}>}
+     */
+    queryKNearest(x, y, z, k, maxRadius = 20.0) {
+        const results = this.queryRadius(x, y, z, maxRadius, 0);
+        results.sort((a, b) => a.distSq - b.distSq);
+        return results.slice(0, k);
+    }
+    
+    /**
+     * Get particles in a specific cell
+     * @param {string} cellKey 
+     * @returns {Set<number>|undefined}
+     */
+    getCell(cellKey) {
+        return this.cells.get(cellKey);
+    }
+    
+    /**
+     * Get all cell keys
+     * @returns {IterableIterator<string>}
+     */
+    getCellKeys() {
+        return this.cells.keys();
+    }
+    
+    /**
+     * Update statistics
+     */
+    updateStats() {
+        this.stats.totalCells = this.cells.size;
+        
+        let totalParticles = 0;
+        let maxParticles = 0;
+        
+        for (const cell of this.cells.values()) {
+            totalParticles += cell.size;
+            maxParticles = Math.max(maxParticles, cell.size);
+        }
+        
+        this.stats.avgParticlesPerCell = this.stats.totalCells > 0 
+            ? totalParticles / this.stats.totalCells 
+            : 0;
+        this.stats.maxParticlesInCell = maxParticles;
+    }
+    
+    /**
+     * Get density estimate at a position
+     * @param {number} x 
+     * @param {number} y 
+     * @param {number} z 
+     * @param {number} radius 
+     * @returns {number} Density (particles per unit volume)
+     */
+    getDensity(x, y, z, radius) {
+        const neighbors = this.queryRadius(x, y, z, radius);
+        const volume = (4.0 / 3.0) * Math.PI * radius * radius * radius;
+        return neighbors.length / volume;
+    }
+}
+
+// Global spatial hash instance
+const spatialHash = new SpatialHash(8.0, 1048576); // 8 unit cells, supports up to 1M particles
+
+/**
+ * Optimized batch query for GPU readback scenarios
+ * Processes multiple queries efficiently
+ */
+class SpatialHashBatchQuery {
+    constructor(spatialHash) {
+        this.hash = spatialHash;
+        this.results = new Map(); // particleIndex -> neighbors
+    }
+    
+    /**
+     * Query neighbors for multiple particles at once
+     * @param {Array<{index: number, x: number, y: number, z: number}>} queries 
+     * @param {number} radius 
+     */
+    batchQuery(queries, radius) {
+        this.results.clear();
+        
+        for (const query of queries) {
+            const neighbors = this.hash.queryRadius(query.x, query.y, query.z, radius);
+            this.results.set(query.index, neighbors.filter(n => n.index !== query.index));
+        }
+        
+        return this.results;
+    }
+}
+
+// =============================================================================
+// === GPU COMPUTE IMPROVEMENTS ===
+// =============================================================================
+// Double-buffered textures, acceleration structure caching, async readback
+
+/**
+ * GPUComputeManager - Enhanced management for GPGPU compute operations
+ * Implements double-buffering and caching for better performance
+ */
+class GPUComputeManager {
+    constructor() {
+        // Double-buffer state tracking
+        this.currentBuffer = 0;
+        this.bufferTextures = {
+            position: [null, null],  // Double buffer for positions
+            velocity: [null, null]   // Double buffer for velocities
+        };
+        
+        // Acceleration structure cache
+        this.accelerationCache = {
+            globalForceField: null,      // Cached global force field texture
+            neighborGrid: null,          // Cached neighbor grid
+            lastUpdateTime: 0,           // Time of last cache update
+            updateInterval: 0.1,         // Cache update interval (seconds)
+            isDirty: true                // Whether cache needs rebuild
+        };
+        
+        // Readback management (for CPU-side operations)
+        this.readbackBuffer = null;
+        this.readbackPending = false;
+        this.lastReadbackData = null;
+        
+        // Performance metrics
+        this.metrics = {
+            computeTime: 0,
+            readbackTime: 0,
+            cacheHits: 0,
+            cacheMisses: 0
+        };
+        
+        // Async readback support (WebGL 2)
+        this.asyncReadbackSupported = false;
+        this.pendingReadbacks = [];
+    }
+    
+    /**
+     * Initialize double buffers for a compute variable
+     * @param {GPUComputationRenderer} gpuCompute 
+     * @param {string} variableName 
+     * @param {THREE.DataTexture} initialTexture 
+     */
+    initDoubleBuffer(gpuCompute, variableName, initialTexture) {
+        // Create two render targets for double buffering
+        const size = initialTexture.image.width;
+        const options = {
+            type: gpuCompute.getDataType ? gpuCompute.getDataType() : THREE.FloatType,
+            format: THREE.RGBAFormat,
+            minFilter: THREE.NearestFilter,
+            magFilter: THREE.NearestFilter
+        };
+        
+        // Note: GPUComputationRenderer handles double buffering internally
+        // This method provides a wrapper for additional control
+        this.bufferTextures[variableName] = [
+            initialTexture,
+            initialTexture.clone()
+        ];
+    }
+    
+    /**
+     * Swap front and back buffers
+     */
+    swapBuffers() {
+        this.currentBuffer = 1 - this.currentBuffer;
+    }
+    
+    /**
+     * Get current buffer index
+     * @returns {number}
+     */
+    getCurrentBufferIndex() {
+        return this.currentBuffer;
+    }
+    
+    /**
+     * Get back buffer index (for reading previous frame)
+     * @returns {number}
+     */
+    getBackBufferIndex() {
+        return 1 - this.currentBuffer;
+    }
+    
+    /**
+     * Update acceleration cache
+     * @param {number} elapsedTime 
+     * @param {Object} forceParams - Parameters for force field calculation
+     */
+    updateAccelerationCache(elapsedTime, forceParams) {
+        const timeSinceUpdate = elapsedTime - this.accelerationCache.lastUpdateTime;
+        
+        if (this.accelerationCache.isDirty || timeSinceUpdate >= this.accelerationCache.updateInterval) {
+            // Mark as needing update
+            this.accelerationCache.isDirty = false;
+            this.accelerationCache.lastUpdateTime = elapsedTime;
+            this.metrics.cacheMisses++;
+            return true; // Indicates cache was updated
+        }
+        
+        this.metrics.cacheHits++;
+        return false; // Cache was still valid
+    }
+    
+    /**
+     * Mark acceleration cache as dirty (force update on next frame)
+     */
+    invalidateCache() {
+        this.accelerationCache.isDirty = true;
+    }
+    
+    /**
+     * Request async readback of position texture (non-blocking)
+     * @param {THREE.WebGLRenderer} renderer 
+     * @param {THREE.WebGLRenderTarget} renderTarget 
+     * @param {Function} callback - Called with Float32Array when data is ready
+     */
+    requestAsyncReadback(renderer, renderTarget, callback) {
+        if (!renderer.capabilities.isWebGL2) {
+            // Fallback to sync readback
+            this.syncReadback(renderer, renderTarget, callback);
+            return;
+        }
+        
+        const gl = renderer.getContext();
+        const width = renderTarget.width;
+        const height = renderTarget.height;
+        const pixelCount = width * height * 4;
+        
+        // Create pixel buffer object for async readback
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, pixelCount * 4, gl.STREAM_READ);
+        
+        // Bind framebuffer and initiate async read
+        renderer.setRenderTarget(renderTarget);
+        gl.readPixels(0, 0, width, height, gl.RGBA, gl.FLOAT, 0);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        renderer.setRenderTarget(null);
+        
+        // Create sync object to detect completion
+        const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        
+        this.pendingReadbacks.push({
+            buffer,
+            sync,
+            width,
+            height,
+            callback,
+            gl
+        });
+        
+        this.readbackPending = true;
+    }
+    
+    /**
+     * Check and process completed async readbacks
+     */
+    processPendingReadbacks() {
+        const completed = [];
+        
+        for (let i = this.pendingReadbacks.length - 1; i >= 0; i--) {
+            const readback = this.pendingReadbacks[i];
+            const { buffer, sync, width, height, callback, gl } = readback;
+            
+            // Check if sync is complete
+            const status = gl.clientWaitSync(sync, 0, 0);
+            
+            if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED) {
+                // Readback is complete - get the data
+                const pixelCount = width * height * 4;
+                const data = new Float32Array(pixelCount);
+                
+                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+                gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, data);
+                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+                
+                // Cleanup
+                gl.deleteSync(sync);
+                gl.deleteBuffer(buffer);
+                
+                // Store and invoke callback
+                this.lastReadbackData = data;
+                callback(data);
+                
+                completed.push(i);
+            }
+        }
+        
+        // Remove completed readbacks
+        for (const index of completed) {
+            this.pendingReadbacks.splice(index, 1);
+        }
+        
+        this.readbackPending = this.pendingReadbacks.length > 0;
+    }
+    
+    /**
+     * Synchronous readback (blocking - use sparingly)
+     * @param {THREE.WebGLRenderer} renderer 
+     * @param {THREE.WebGLRenderTarget} renderTarget 
+     * @param {Function} callback 
+     */
+    syncReadback(renderer, renderTarget, callback) {
+        const startTime = performance.now();
+        
+        const width = renderTarget.width;
+        const height = renderTarget.height;
+        const pixelCount = width * height * 4;
+        const data = new Float32Array(pixelCount);
+        
+        renderer.readRenderTargetPixels(renderTarget, 0, 0, width, height, data);
+        
+        this.metrics.readbackTime = performance.now() - startTime;
+        this.lastReadbackData = data;
+        callback(data);
+    }
+    
+    /**
+     * Get cached position data (from last readback)
+     * @returns {Float32Array|null}
+     */
+    getCachedPositionData() {
+        return this.lastReadbackData;
+    }
+    
+    /**
+     * Get performance metrics
+     * @returns {Object}
+     */
+    getMetrics() {
+        return { ...this.metrics };
+    }
+    
+    /**
+     * Reset metrics
+     */
+    resetMetrics() {
+        this.metrics = {
+            computeTime: 0,
+            readbackTime: 0,
+            cacheHits: 0,
+            cacheMisses: 0
+        };
+    }
+}
+
+/**
+ * FrameTimeOptimizer - Manages compute workload distribution across frames
+ * Prevents frame spikes by spreading heavy operations
+ */
+class FrameTimeOptimizer {
+    constructor(targetFrameTime = 16.67) {
+        this.targetFrameTime = targetFrameTime; // 60 FPS = 16.67ms
+        this.frameTimeBudget = targetFrameTime * 0.8; // Leave 20% headroom
+        
+        // Deferred operations queue
+        this.deferredOperations = [];
+        
+        // Frame timing history
+        this.frameHistory = [];
+        this.maxHistorySize = 30;
+        
+        // Work scheduling
+        this.pendingWork = [];
+        this.workBudgetPerFrame = 4; // Max operations per frame
+    }
+    
+    /**
+     * Record frame timing
+     * @param {number} frameTime - Time taken for current frame (ms)
+     */
+    recordFrameTime(frameTime) {
+        this.frameHistory.push(frameTime);
+        if (this.frameHistory.length > this.maxHistorySize) {
+            this.frameHistory.shift();
+        }
+    }
+    
+    /**
+     * Get average frame time
+     * @returns {number}
+     */
+    getAverageFrameTime() {
+        if (this.frameHistory.length === 0) return this.targetFrameTime;
+        return this.frameHistory.reduce((a, b) => a + b, 0) / this.frameHistory.length;
+    }
+    
+    /**
+     * Check if we have budget for additional work
+     * @param {number} estimatedCost - Estimated time for operation (ms)
+     * @returns {boolean}
+     */
+    hasBudget(estimatedCost) {
+        const avgFrameTime = this.getAverageFrameTime();
+        return avgFrameTime + estimatedCost < this.frameTimeBudget;
+    }
+    
+    /**
+     * Schedule work for future frame
+     * @param {Function} operation - Work to be done
+     * @param {number} priority - Higher = more urgent (0-10)
+     * @param {number} estimatedCost - Estimated time in ms
+     */
+    scheduleWork(operation, priority = 5, estimatedCost = 1) {
+        this.pendingWork.push({
+            operation,
+            priority,
+            estimatedCost,
+            scheduledTime: performance.now()
+        });
+        
+        // Sort by priority (highest first)
+        this.pendingWork.sort((a, b) => b.priority - a.priority);
+    }
+    
+    /**
+     * Process pending work within budget
+     * @returns {number} Number of operations completed
+     */
+    processPendingWork() {
+        let completed = 0;
+        const startTime = performance.now();
+        
+        while (this.pendingWork.length > 0 && completed < this.workBudgetPerFrame) {
+            const elapsed = performance.now() - startTime;
+            if (elapsed > this.frameTimeBudget * 0.2) break; // Don't exceed 20% of budget
+            
+            const work = this.pendingWork.shift();
+            work.operation();
+            completed++;
+        }
+        
+        return completed;
+    }
+    
+    /**
+     * Defer an operation to next frame
+     * @param {Function} operation 
+     */
+    deferToNextFrame(operation) {
+        this.deferredOperations.push(operation);
+    }
+    
+    /**
+     * Execute deferred operations
+     */
+    executeDeferredOperations() {
+        const operations = this.deferredOperations.splice(0);
+        for (const op of operations) {
+            op();
+        }
+    }
+}
+
+// Global instances
+const gpuComputeManager = new GPUComputeManager();
+const frameTimeOptimizer = new FrameTimeOptimizer();
+
 let socket;
 let clock;
 
 // --- Camera Control Variables (Zoom Only - No Orbit) ---
-let targetZoom = 70;           // Target camera Z position (farther for larger cloud)
-let currentZoom = 70;          // Current camera Z position
+// Using spring physics for smooth, organic zoom feel
+let zoomSpring = null; // Will be initialized in init()
 const MIN_ZOOM = 35;           // Closest zoom (smaller = closer)
 const MAX_ZOOM = 180;          // Farthest zoom (larger range for bigger cloud)
-const ZOOM_SPEED = 0.1;        // Zoom interpolation speed (smoother)
 const ZOOM_SENSITIVITY = 0.05; // Mouse wheel sensitivity (gentler)
+
+// Camera position springs for smooth screen-space movement
+let cameraXSpring = null;
+let cameraYSpring = null;
 
 // --- GPGPU Variables ---
 let gpuCompute;
@@ -1863,6 +3836,12 @@ const TENDRIL_PARTICLE_COUNT = 4000; // Particles per tendril stream
 const TENDRIL_MAX_CONNECTIONS = 8;   // 8 connections: 4 outgoing + 4 incoming for TRUE bidirection
 const TENDRIL_OUTGOING_COUNT = 4;    // First 4 are outgoing (this → other)
 const TENDRIL_INCOMING_COUNT = 4;    // Last 4 are incoming (other → this, simulated)
+// Enhanced tendril visual parameters
+const TENDRIL_FLOW_FIELD_STRENGTH = 0.15;   // Flow field influence on tendril path
+const TENDRIL_CURVATURE_AMOUNT = 0.12;      // Catmull-Rom spline curvature
+const TENDRIL_WIDTH_PROFILE_POWER = 1.5;    // Width taper power (higher = sharper taper)
+const TENDRIL_TURBULENCE_FREQ = 0.08;       // Turbulence noise frequency
+const TENDRIL_TURBULENCE_AMP = 3.0;         // Turbulence displacement amplitude
 
 // --- Ambient Dust System ---
 let dustPoints;
@@ -1934,11 +3913,13 @@ function initPostProcessing() {
     );
     composer.addPass(bloomPass);
 
-    // Custom film effects pass (vignette, chromatic aberration, film grain)
+    // Custom film effects pass (vignette, chromatic aberration, film grain, caustics, dispersion)
     filmPass = new ShaderPass(FilmShader);
+    // Initialize Vector2 uniform for radial blur center
+    filmPass.uniforms.uRadialBlurCenter.value = new THREE.Vector2(0.5, 0.5);
     composer.addPass(filmPass);
 
-    console.log("Post-processing pipeline initialized");
+    console.log("Post-processing pipeline initialized with enhanced VFX");
 }
 
 /**
@@ -2102,6 +4083,42 @@ function init() {
     initTendrils();
     initDust();
     initGhostClouds();
+
+    // === INITIALIZE ANIMATION SPRINGS ===
+    // Zoom spring: stiff for responsive zoom, moderate damping for slight overshoot
+    zoomSpring = new Spring({
+        initial: 70,
+        target: 70,
+        stiffness: 120,   // Responsive but not snappy
+        damping: 14,      // Slight overshoot for organic feel
+        mass: 1
+    });
+    
+    // Camera position springs for smooth screen-space following
+    cameraXSpring = new Spring({
+        initial: 0,
+        target: 0,
+        stiffness: 80,    // Softer for smooth camera movement
+        damping: 12,
+        mass: 1
+    });
+    cameraYSpring = new Spring({
+        initial: 0,
+        target: 0,
+        stiffness: 80,
+        damping: 12,
+        mass: 1
+    });
+    
+    // Configure stagger system for breathing effects (radiate from center)
+    animationManager.staggerSystem = new StaggerSystem({
+        type: 'distance',
+        origin: { x: 0, y: 0, z: 0 },
+        amount: 0.015,     // 15ms stagger per unit distance
+        maxStagger: 1.5    // Max 1.5 second stagger
+    });
+    
+    console.log("Animation Core initialized: springs, easing, breathing rhythm");
 
     // === UPDATE MATERIAL COLORS AFTER ALL GEOMETRY INITIALIZED ===
     // Now that materials exist, apply the color scheme
@@ -2297,6 +4314,10 @@ function initComputeRenderer() {
              uViscosityBase: { value: VISCOSITY_BASE },
              uViscosityVariation: { value: VISCOSITY_VARIATION },
              uClusteringStrength: { value: CLUSTERING_STRENGTH },
+             // Enhanced Physics - Vortex Confinement
+             uVortexConfinementStrength: { value: VORTEX_CONFINEMENT_STRENGTH },
+             uDeltaTime: { value: 0.016 },
+             uPreviousPositionBlend: { value: 0.0 },
              // Layer system uniforms
              uLayerInnerRadius: { value: LAYER_CONFIG.map(l => l.innerRadius) },
              uLayerOuterRadius: { value: LAYER_CONFIG.map(l => l.outerRadius) },
@@ -2362,8 +4383,12 @@ function initParticleGeometry() {
             uLightDirection: { value: LIGHT_DIRECTION },
             uRimLightStrength: { value: RIM_LIGHT_STRENGTH },
             uAmbientOcclusionStrength: { value: AMBIENT_OCCLUSION_STRENGTH },
-            // Quality/LOD uniform
+            // Quality/LOD uniforms
             uQualityMultiplier: { value: 1.0 },
+            // LOD system uniforms (distance-based quality scaling)
+            uLODSizeMultiplier: { value: 1.0 },
+            uLODAlphaMultiplier: { value: 1.0 },
+            uLODComplexity: { value: 1.0 },
             // Layer system uniforms for visual differentiation
             uLayerBaseColor: { value: LAYER_CONFIG.map(l => new THREE.Vector3(...l.baseColor)) },
             uLayerEdgeColor: { value: LAYER_CONFIG.map(l => new THREE.Vector3(...l.edgeColor)) },
@@ -2371,7 +4396,16 @@ function initParticleGeometry() {
             uLayerSizeMin: { value: LAYER_CONFIG.map(l => l.particleSizeMin) },
             uLayerSizeMax: { value: LAYER_CONFIG.map(l => l.particleSizeMax) },
             uLayerInnerRadius: { value: LAYER_CONFIG.map(l => l.innerRadius) },
-            uLayerOuterRadius: { value: LAYER_CONFIG.map(l => l.outerRadius) }
+            uLayerOuterRadius: { value: LAYER_CONFIG.map(l => l.outerRadius) },
+            // === PARTICLE CHARACTER SYSTEM UNIFORMS ===
+            uSquashStretchIntensity: { value: SQUASH_STRETCH_INTENSITY },
+            uSecondaryMotionStrength: { value: SECONDARY_MOTION_STRENGTH },
+            uMoodWaveSpeed: { value: MOOD_WAVE_SPEED },
+            uMoodIntensity: { value: MOOD_INTENSITY },
+            uBreathingPhase: { value: 0.0 },  // Updated from AnimationCore breathing rhythm
+            // === VOLUMETRIC CORE GLOW UNIFORMS ===
+            uCoreGlowStrength: { value: 0.4 },   // Intensity of core glow
+            uCoreGlowRadius: { value: LAYER_CONFIG[1].outerRadius }  // Radius of core glow effect
         },
         vertexShader: particleVertexShader,
         fragmentShader: particleFragmentShader,
@@ -2477,20 +4511,28 @@ function calculateLODMultiplier(distanceFromCamera) {
 
 /**
  * Setup camera controls - Zoom only (no orbit)
+ * Uses spring physics for smooth, organic zoom feel
  */
 function setupCameraControls() {
     const canvas = renderer.domElement;
 
-    // Mouse wheel zoom
+    // Mouse wheel zoom with spring physics
     canvas.addEventListener('wheel', (e) => {
         e.preventDefault();
         const delta = e.deltaY * ZOOM_SENSITIVITY;
-        targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, targetZoom + delta));
+        const currentTarget = zoomSpring.target;
+        const newTarget = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, currentTarget + delta));
+        zoomSpring.setTarget(newTarget);
+        
+        // Add a small impulse for extra responsiveness on quick scrolls
+        if (Math.abs(e.deltaY) > 50) {
+            zoomSpring.impulse(delta * 0.5);
+        }
     }, { passive: false });
 
     // Touch support for mobile - pinch zoom only
     let touchStartDistance = 0;
-    let initialZoom = targetZoom;
+    let initialZoom = 70;
 
     canvas.addEventListener('touchstart', (e) => {
         if (e.touches.length === 2) {
@@ -2498,7 +4540,7 @@ function setupCameraControls() {
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             touchStartDistance = Math.sqrt(dx * dx + dy * dy);
-            initialZoom = targetZoom;
+            initialZoom = zoomSpring.target;
         }
     }, { passive: true });
 
@@ -2509,7 +4551,8 @@ function setupCameraControls() {
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             const distance = Math.sqrt(dx * dx + dy * dy);
             const scale = touchStartDistance / distance;
-            targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, initialZoom * scale));
+            const newTarget = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, initialZoom * scale));
+            zoomSpring.setTarget(newTarget);
         }
     }, { passive: true });
 
@@ -2517,7 +4560,7 @@ function setupCameraControls() {
         touchStartDistance = 0;
     });
 
-    console.log("Camera controls initialized (scroll/pinch to zoom)");
+    console.log("Camera controls initialized with spring physics (scroll/pinch to zoom)");
 }
 
 function onWindowResize() {
@@ -2532,22 +4575,39 @@ function onWindowResize() {
 }
 
 function animate() {
+    const frameStartTime = performance.now();
     requestAnimationFrame(animate);
     const deltaTime = clock.getDelta();
     const elapsedTime = clock.getElapsedTime();
+
+    // --- Update Animation Core Systems ---
+    animationManager.update(deltaTime);
 
     // --- Update WindowManager ---
     if (windowManager) {
         windowManager.update();
     }
 
+    // --- Process Deferred Operations from Previous Frame ---
+    frameTimeOptimizer.executeDeferredOperations();
+    frameTimeOptimizer.processPendingWork();
+
+    // --- Process Async GPU Readbacks ---
+    gpuComputeManager.processPendingReadbacks();
+
     // --- Adaptive Quality Monitoring ---
     updateAdaptiveQuality(deltaTime, elapsedTime);
+
+    // --- LOD System Update ---
+    // Calculate distance from camera to particle cloud center
+    const cameraZ = camera.position.z;
+    lodManager.update(cameraZ, deltaTime);
+    lodManager.updateFrustum(camera);
 
     // --- Get this window info for screen-space positioning ---
     const thisWindow = windowManager ? windowManager.getThisWindow() : null;
 
-    // --- Screen-Space Camera Positioning (bgstaal approach) ---
+    // --- Screen-Space Camera Positioning (bgstaal approach) with Spring Physics ---
     // Camera position is based on window's screen coordinates
     // This makes particles appear static relative to the monitor as windows move
     if (thisWindow) {
@@ -2556,15 +4616,17 @@ function animate() {
         const targetCamX = thisWindow.center.x;
         const targetCamY = -thisWindow.center.y;
 
-        // Smooth camera movement
-        camera.position.x += (targetCamX - camera.position.x) * 0.15;
-        camera.position.y += (targetCamY - camera.position.y) * 0.15;
+        // Use spring physics for smooth, organic camera movement
+        cameraXSpring.setTarget(targetCamX);
+        cameraYSpring.setTarget(targetCamY);
+        
+        camera.position.x = cameraXSpring.update(deltaTime);
+        camera.position.y = cameraYSpring.update(deltaTime);
     }
 
-    // --- Camera Zoom (No Orbit) ---
-    // Smooth zoom interpolation
-    currentZoom += (targetZoom - currentZoom) * ZOOM_SPEED;
-    camera.position.z = currentZoom;
+    // --- Camera Zoom with Spring Physics ---
+    // Spring-based zoom for smooth, organic feel with slight overshoot
+    camera.position.z = zoomSpring.update(deltaTime);
 
     // Camera always looks at the particle cloud center
     if (thisWindow) {
@@ -2579,9 +4641,16 @@ function animate() {
 
     // --- 1. Update GPGPU Simulation ---
     if (gpuCompute) {
+        // === GPU COMPUTE MANAGER: Update acceleration cache ===
+        const cacheUpdated = gpuComputeManager.updateAccelerationCache(elapsedTime, {
+            windowCenters: otherWindowCenters,
+            sceneOffset: sceneOffset
+        });
+        
         // Update dynamic uniforms for velocity shader
         velocityVariable.material.uniforms.uNoiseTime.value = elapsedTime * NOISE_SPEED;
         velocityVariable.material.uniforms.uTime.value = elapsedTime;
+        velocityVariable.material.uniforms.uDeltaTime.value = deltaTime;
 
         // Update time for position shader (particle lifecycle)
         positionVariable.material.uniforms.uTime.value = elapsedTime;
@@ -2656,6 +4725,21 @@ function animate() {
         material.uniforms.uPositionTexture.value = gpuCompute.getCurrentRenderTarget(positionVariable).texture;
         material.uniforms.uVelocityTexture.value = gpuCompute.getCurrentRenderTarget(velocityVariable).texture;
         material.uniforms.uTime.value = elapsedTime;
+        
+        // === UPDATE LOD UNIFORMS ===
+        const lodUniforms = lodManager.getUniforms();
+        material.uniforms.uLODSizeMultiplier.value = lodUniforms.uLODSizeMultiplier;
+        material.uniforms.uLODAlphaMultiplier.value = lodUniforms.uLODAlphaMultiplier;
+        material.uniforms.uLODComplexity.value = lodUniforms.uLODComplexity;
+        
+        // === UPDATE PARTICLE CHARACTER SYSTEM UNIFORMS ===
+        // Get breathing value from AnimationCore (if available)
+        if (animationManager && animationManager.breathingRhythm) {
+            material.uniforms.uBreathingPhase.value = animationManager.breathingRhythm.getValue();
+        } else {
+            // Fallback: simple sine wave breathing
+            material.uniforms.uBreathingPhase.value = elapsedTime * 0.5;
+        }
     }
 
     // --- 5. Render with Post-Processing ---
@@ -2663,11 +4747,22 @@ function animate() {
         filmPass.uniforms.uTime.value = elapsedTime;
     }
 
+    // === LOD-BASED POST-PROCESSING QUALITY ===
+    // Reduce bloom strength at distance for performance
+    if (bloomPass && lodManager) {
+        const lodEffect = lodManager.currentEffectQuality;
+        bloomPass.strength = BLOOM_STRENGTH * lodEffect * qualityMultiplier;
+    }
+
     if (composer) {
         composer.render();
     } else {
         renderer.render(scene, camera);
     }
+
+    // --- Frame Time Recording for Optimizer ---
+    const frameEndTime = performance.now();
+    frameTimeOptimizer.recordFrameTime(frameEndTime - frameStartTime);
 }
 
 /**
@@ -2750,6 +4845,13 @@ function initTendrils() {
         uniform float uConnectionStrengths[8];
         uniform float uEntanglementProgress[8]; // 0=far, 1=merged (fade out tendrils)
         uniform float uGlobalTimeOffset; // For cross-window coherent animation
+        
+        // === ENHANCED TENDRIL UNIFORMS ===
+        uniform float uFlowFieldStrength;      // Influence of flow field on tendril path
+        uniform float uCurvatureAmount;        // How much tendrils curve (Catmull-Rom tension)
+        uniform float uWidthProfilePower;      // Power for width falloff (higher = sharper taper)
+        uniform float uTurbulenceFrequency;    // Frequency of turbulent displacement
+        uniform float uTurbulenceAmplitude;    // Amplitude of turbulent displacement
 
         varying float vAlpha;
         varying vec3 vColor;
@@ -2758,10 +4860,89 @@ function initTendrils() {
         varying float vDirection;
         varying float vHelixStrand; // Which of the 3 helix strands (0, 1, 2)
         varying float vNucleusInfluence;
+        varying float vWidthProfile;   // NEW: dynamic width for fragment shader
 
         // Smooth hash function
         float hash(float n) {
             return fract(sin(n) * 43758.5453123);
+        }
+        
+        // 3D hash for flow field
+        vec3 hash3(vec3 p) {
+            p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+                     dot(p, vec3(269.5, 183.3, 246.1)),
+                     dot(p, vec3(113.5, 271.9, 124.6)));
+            return fract(sin(p) * 43758.5453123);
+        }
+        
+        // Simplex-like 3D noise for flow field
+        float noise3D(vec3 p) {
+            vec3 i = floor(p);
+            vec3 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            
+            float n = dot(i, vec3(1.0, 57.0, 113.0));
+            return mix(mix(mix(hash(n + 0.0), hash(n + 1.0), f.x),
+                          mix(hash(n + 57.0), hash(n + 58.0), f.x), f.y),
+                      mix(mix(hash(n + 113.0), hash(n + 114.0), f.x),
+                          mix(hash(n + 170.0), hash(n + 171.0), f.x), f.y), f.z);
+        }
+        
+        // Flow field - returns displacement vector based on position
+        vec3 flowField(vec3 p, float time) {
+            float scale = 0.02;
+            vec3 scaled = p * scale;
+            
+            // Multi-octave turbulent flow
+            vec3 flow = vec3(0.0);
+            float amp = 1.0;
+            float freq = 1.0;
+            
+            for (int i = 0; i < 3; i++) {
+                flow.x += (noise3D(scaled * freq + time * 0.1) - 0.5) * amp;
+                flow.y += (noise3D(scaled * freq + vec3(100.0, 0.0, 0.0) + time * 0.12) - 0.5) * amp;
+                flow.z += (noise3D(scaled * freq + vec3(0.0, 100.0, 0.0) + time * 0.08) - 0.5) * amp;
+                amp *= 0.5;
+                freq *= 2.0;
+            }
+            
+            return flow;
+        }
+        
+        // Catmull-Rom spline interpolation for smooth curves
+        vec3 catmullRom(vec3 p0, vec3 p1, vec3 p2, vec3 p3, float t, float tension) {
+            float t2 = t * t;
+            float t3 = t2 * t;
+            
+            // Tension affects how tight the curve is (0.5 = standard, 0 = tight, 1 = loose)
+            float s = (1.0 - tension) * 0.5;
+            
+            vec3 v0 = (p2 - p0) * s;
+            vec3 v1 = (p3 - p1) * s;
+            
+            // Hermite basis functions
+            float h1 = 2.0 * t3 - 3.0 * t2 + 1.0;
+            float h2 = -2.0 * t3 + 3.0 * t2;
+            float h3 = t3 - 2.0 * t2 + t;
+            float h4 = t3 - t2;
+            
+            return h1 * p1 + h2 * p2 + h3 * v0 + h4 * v1;
+        }
+        
+        // Dynamic width profile - organic taper with bulges
+        float calculateWidth(float t, float connectionStrength) {
+            // Base exponential taper from source to destination
+            float baseTaper = pow(1.0 - t, uWidthProfilePower);
+            
+            // Add organic bulges at key points (source emergence, midpoint pulse)
+            float sourceBulge = exp(-t * 4.0) * 0.6;  // Bulge at source
+            float midBulge = exp(-pow((t - 0.4) * 3.0, 2.0)) * 0.25;  // Gentle mid-pulse
+            
+            // Combine for organic profile
+            float width = baseTaper * (1.0 + sourceBulge + midBulge);
+            
+            // Scale by connection strength
+            return width * connectionStrength;
         }
 
         // Constants for tri-helix
@@ -2834,11 +5015,31 @@ function initTendrils() {
             float smoothT = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
             vProgress = smoothT;
 
-            // === TRI-HELICAL GEOMETRY ===
-            // Base position along the connection axis
-            vec3 basePos = mix(sourcePoint, destPoint, smoothT);
+            // === CATMULL-ROM SPLINE PATH ===
+            // Create control points for smooth curved tendril path
+            vec3 p0 = uThisCenter;  // Before source
+            vec3 p1 = uThisCenter + connDir * uNucleusRadius * 1.1;  // Source
+            vec3 p3 = targetCenter - connDir * uCloudRadius * 0.35;  // Destination
+            vec3 p4 = targetCenter;  // After destination
+            
+            // Calculate midpoint with curvature offset
+            vec3 midPoint = mix(p1, p3, 0.5);
+            // Add perpendicular offset for natural curve
+            vec3 curveOffset = perpUp * sin(particleID * 0.1) * connectionDist * uCurvatureAmount;
+            curveOffset += right * cos(particleID * 0.13 + globalTime * 0.1) * connectionDist * uCurvatureAmount * 0.5;
+            vec3 p2 = midPoint + curveOffset;
+            
+            // Swap for incoming streams
+            if (isIncoming) {
+                vec3 tempP1 = p1;
+                p1 = p3;
+                p3 = tempP1;
+                vec3 tempP0 = p0;
+                p0 = p4;
+                p4 = tempP0;
+            }
 
-            // Create perpendicular basis vectors
+            // Create perpendicular basis vectors (before spline for flow field)
             vec3 up = vec3(0.0, 1.0, 0.0);
             vec3 right = normalize(cross(connDir, up));
             if (length(right) < 0.1) {
@@ -2846,13 +5047,31 @@ function initTendrils() {
             }
             vec3 perpUp = normalize(cross(connDir, right));
 
-            // === TAPERED HELIX RADIUS ===
-            // Bigger at origin (t=0), smaller at middle (t=0.5) and end (t=1)
-            // Creates the "bigger at origin, smaller at ends/middle" effect
-            float taperCurve = 1.0 - smoothT; // Linear taper from 1 to 0
-            // Add a slight bulge near the source for organic feel
-            float bulgeFactor = exp(-smoothT * 3.0) * 0.5 + 0.5; // Exponential decay
-            float helixRadius = 8.0 * taperCurve * bulgeFactor + 1.5; // 1.5-8 range
+            // Use Catmull-Rom for smooth path
+            // Map t to 0-2 range for two-segment spline
+            vec3 basePos;
+            float localT = smoothT * 2.0;
+            if (localT < 1.0) {
+                basePos = catmullRom(p0, p1, p2, p3, localT, 0.5 - uCurvatureAmount);
+            } else {
+                basePos = catmullRom(p1, p2, p3, p4, localT - 1.0, 0.5 - uCurvatureAmount);
+            }
+            
+            // === FLOW FIELD INFLUENCE ===
+            // Add turbulent displacement from flow field
+            vec3 flowDisplacement = flowField(basePos, globalTime) * uFlowFieldStrength;
+            // Flow field influence decreases toward endpoints (keep endpoints stable)
+            float flowInfluence = smoothT * (1.0 - smoothT) * 4.0; // Parabola, max at t=0.5
+            basePos += flowDisplacement * flowInfluence * connectionDist * 0.3;
+            
+            // === DYNAMIC WIDTH PROFILE ===
+            float widthProfile = calculateWidth(smoothT, strength);
+            vWidthProfile = widthProfile;
+
+            // === TAPERED HELIX RADIUS (now uses dynamic width) ===
+            float taperCurve = widthProfile;
+            float bulgeFactor = exp(-smoothT * 3.0) * 0.5 + 0.5;
+            float helixRadius = 8.0 * taperCurve * bulgeFactor + 1.5;
 
             // === HELIX ROTATION ===
             // Helix winds around the axis with coherent animation
@@ -2867,17 +5086,23 @@ function initTendrils() {
             vec3 helixOffset = right * cos(helixAngle) * helixRadius +
                                perpUp * sin(helixAngle) * helixRadius;
 
+            // === TURBULENT DISPLACEMENT ===
+            // Add multi-frequency turbulence for organic feel
+            vec3 turbulence = vec3(0.0);
+            turbulence.x = noise3D(basePos * uTurbulenceFrequency + globalTime * 0.2) - 0.5;
+            turbulence.y = noise3D(basePos * uTurbulenceFrequency + vec3(50.0, 0.0, 0.0) + globalTime * 0.15) - 0.5;
+            turbulence.z = noise3D(basePos * uTurbulenceFrequency + vec3(0.0, 50.0, 0.0) + globalTime * 0.18) - 0.5;
+            helixOffset += turbulence * uTurbulenceAmplitude * taperCurve;
+
             // === ORGANIC WAVE PERTURBATION ===
-            // Add gentle wave motion for organic feel
             float waveFreq = 2.5;
-            float waveAmp = taperCurve * 2.0; // Waves stronger near origin
+            float waveAmp = taperCurve * 2.0;
             float wavePhase = globalTime * 0.5 + smoothT * TAU * waveFreq;
 
             helixOffset += perpUp * sin(wavePhase) * waveAmp * 0.3;
             helixOffset += right * cos(wavePhase * 0.7 + float(strandIdx)) * waveAmp * 0.2;
 
             // === BREATHING/PULSE ===
-            // Gentle breathing synchronized across strands
             float breathe = 1.0 + sin(globalTime * 0.6) * 0.08;
             helixOffset *= breathe;
 
@@ -2888,9 +5113,8 @@ function initTendrils() {
             vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
             gl_Position = projectionMatrix * mvPosition;
 
-            // === PARTICLE SIZE - TAPERED ===
-            // Bigger at origin, smaller toward middle/end
-            float sizeTaper = taperCurve * bulgeFactor; // Same taper as radius
+            // === PARTICLE SIZE - DYNAMIC WIDTH ===
+            float sizeTaper = widthProfile * bulgeFactor;
             float baseSize = 1.2 + hash(particleID * 0.37) * 0.3;
 
             // Strand variation (center strand slightly larger)
@@ -2977,6 +5201,7 @@ function initTendrils() {
         varying float vDirection;
         varying float vHelixStrand; // 0, 1, or 2 for tri-helix
         varying float vNucleusInfluence;
+        varying float vWidthProfile;   // Dynamic width for enhanced rendering
 
         // Simplex noise for plasma effects
         vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -3121,7 +5346,13 @@ function initTendrils() {
             // Used to fade out tendrils as windows get close
             uEntanglementProgress: { value: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] },
             // Global time sync offset for coherent cross-window animation
-            uGlobalTimeOffset: { value: 0.0 }
+            uGlobalTimeOffset: { value: 0.0 },
+            // === ENHANCED TENDRIL UNIFORMS ===
+            uFlowFieldStrength: { value: 0.15 },      // Influence of flow field on path
+            uCurvatureAmount: { value: 0.12 },        // Catmull-Rom curve intensity
+            uWidthProfilePower: { value: 1.5 },       // Width taper power
+            uTurbulenceFrequency: { value: 0.08 },    // Turbulence noise frequency
+            uTurbulenceAmplitude: { value: 3.0 }      // Turbulence displacement amount
         },
         vertexShader: tendrilVertexShader,
         fragmentShader: tendrilFragmentShader,
